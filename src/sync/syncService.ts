@@ -88,7 +88,20 @@ export class SyncService {
     this.setState({ status: "connecting" });
     const roomId = await roomIdFromSecret(secret);
     const room = joinRoom(
-      { appId: "project-one-p2p-v1", password: secret },
+      {
+        appId: "project-one-p2p-v1",
+        password: secret,
+        // Keep signaling focused on the relays that accept this app's encrypted events.
+        // The package defaults currently include public relays that reject writes,
+        // which creates noisy retries before the phones can see each other.
+        relayConfig: {
+          urls: [
+            "wss://relay.nostrdice.com",
+            "wss://nostr.sathoarder.com",
+            "wss://nostr.tegila.com.br",
+          ],
+        },
+      },
       roomId,
       {
         onJoinError: () => {
@@ -109,7 +122,9 @@ export class SyncService {
     });
 
     room.onPeerLeave((peerId) => {
+      const deviceId = this.peerDevices.get(peerId);
       this.peerDevices.delete(peerId);
+      if (deviceId && !Array.from(this.peerDevices.values()).includes(deviceId)) void this.repository.forgetPeer(deviceId);
       const peerCount = Object.keys(room.getPeers()).length;
       this.setState({ status: peerCount ? "connected" : navigator.onLine ? "pending" : "offline", peerCount });
       if (!peerCount && navigator.onLine) this.scheduleConnectionRetry();
@@ -151,19 +166,22 @@ export class SyncService {
     if (!this.device || this.flushing.has(peerId)) return;
     this.flushing.add(peerId);
     try {
-      const pending = await this.repository.pendingOperations(50);
-      if (!pending.length) return;
-      const ids = pending.map((operation) => operation.operationId);
-      await this.repository.markSending(ids);
-      this.setState({ status: "syncing" });
-      try {
-        await sendAction(
-          { protocol: 1, senderDeviceId: this.device.deviceId, operations: pending } as OperationsMessage,
-          peerId,
-        );
-      } catch {
-        await this.repository.requeueOperations(ids);
-        this.setState({ status: navigator.onLine ? "pending" : "offline" });
+      while (true) {
+        const pending = await this.repository.pendingOperations(50);
+        if (!pending.length) return;
+        const ids = pending.map((operation) => operation.operationId);
+        await this.repository.markSending(ids);
+        this.setState({ status: "syncing" });
+        try {
+          await sendAction(
+            { protocol: 1, senderDeviceId: this.device.deviceId, operations: pending } as OperationsMessage,
+            peerId,
+          );
+        } catch {
+          await this.repository.requeueOperations(ids);
+          this.setState({ status: navigator.onLine ? "pending" : "offline" });
+          return;
+        }
       }
     } finally {
       this.flushing.delete(peerId);
@@ -177,6 +195,13 @@ export class SyncService {
     }
     const [sendOperations] = this.room.makeAction<any>("operations");
     await Promise.all(Object.keys(this.room.getPeers()).map((peerId) => this.flushToPeer(peerId, sendOperations)));
+  }
+
+  async updateDeviceLabel(label: string) {
+    if (!this.device || !this.room) return;
+    this.device = { ...this.device, label };
+    const [sendHello] = this.room.makeAction<any>("hello");
+    await Promise.all(Object.keys(this.room.getPeers()).map((peerId) => sendHello({ protocol: 1, deviceId: this.device!.deviceId, label }, peerId)));
   }
 
   async handleOnline() {
