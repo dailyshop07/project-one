@@ -88,6 +88,7 @@ export class SyncService {
   private reconnectAttemptInFlight = false;
   private lastResumeRestartAt = 0;
   private hiddenAt?: number;
+  private backgroundPreparePromise?: Promise<void>;
   private restartPromise?: Promise<void>;
   private restarting = false;
   private stopped = false;
@@ -532,6 +533,7 @@ export class SyncService {
 
   async handleOnline(forceReconnect = false) {
     if (this.stopped || !navigator.onLine || !this.secret || !this.device) return;
+    if (this.backgroundPreparePromise) await this.backgroundPreparePromise;
     const resumedFromBackground = this.hiddenAt !== undefined;
     this.hiddenAt = undefined;
     if (this.restartPromise) {
@@ -566,11 +568,40 @@ export class SyncService {
   }
 
   handleHidden() {
-    // Keep the current room and remember that its WebRTC state may become
-    // stale while iOS suspends the page. On the next visible event,
-    // handleOnline() performs one full room restart so a stale "connected"
-    // RTCPeerConnection cannot block rediscovery.
     this.hiddenAt ??= Date.now();
+    void this.prepareForBackground();
+  }
+
+  private prepareForBackground() {
+    if (this.backgroundPreparePromise) return this.backgroundPreparePromise;
+    this.clearConnectionTimers();
+    this.stopConnectionRetry();
+    this.clearDeliveryTimer();
+    this.clearSnapshotState();
+    this.restarting = true;
+    const oldRoom = this.room;
+    this.room = undefined;
+    this.peerDevices.clear();
+    this.snapshotting.clear();
+    this.snapshotSynced.clear();
+    this.setState({ status: navigator.onLine ? "pending" : "offline", peerCount: 0 });
+
+    const prepare = (async () => {
+      try {
+        await oldRoom?.leave();
+      } catch {
+        // iOS may suspend the page before the signaling goodbye completes.
+        // The important part is that the in-memory room is discarded before
+        // the next foreground startup.
+      } finally {
+        this.restarting = false;
+      }
+    })();
+    this.backgroundPreparePromise = prepare;
+    void prepare.finally(() => {
+      if (this.backgroundPreparePromise === prepare) this.backgroundPreparePromise = undefined;
+    });
+    return prepare;
   }
 
   handleOffline() {
