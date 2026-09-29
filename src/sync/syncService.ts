@@ -572,9 +572,9 @@ export function pendingPairingSecretFromStorage() {
 function rememberPairingCookie(secret: string) {
   try {
     const secure = location.protocol === "https:" ? "; Secure" : "";
-    // iOS copies first-party cookies when creating a Home Screen Web App.
-    // This is the browser-supported bridge for Safari's isolated
-    // localStorage/IndexedDB containers.
+    // This is a fallback bridge for iOS versions that copy first-party
+    // cookies when creating a Home Screen Web App. The invitation launch URL
+    // is the primary handoff because Safari and standalone storage are isolated.
     document.cookie = `${pendingPairingCookieName}=${encodeURIComponent(secret)}; Max-Age=${Math.floor(pendingPairingMaxAgeMs / 1000)}; Path=/; SameSite=Lax${secure}`;
   } catch {
     // Safari private browsing may deny cookies; the URL/manual reconnect is the fallback.
