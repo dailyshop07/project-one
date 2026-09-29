@@ -3,6 +3,7 @@ import type { DeviceRecord, SyncOperation } from "../types";
 import type { Repository } from "../db/repository";
 import { randomId, roomIdFromSecret, validPairingSecret } from "../db/identity";
 import { fetchTurnIceServers } from "./turnCredentials";
+import { KeepPristineOfferPeerConnection } from "./rtcPolyfill";
 
 export type SyncStatus = "local" | "offline" | "connecting" | "connected" | "syncing" | "pending" | "error";
 
@@ -13,7 +14,6 @@ const snapshotBatchSize = 50;
 const pendingConnectionNoticeMs = 3_000;
 const minimumResumeRestartIntervalMs = 3_000;
 const connectionRetryIntervalMs = 1_000;
-const minimumReconnectRestartIntervalMs = 3_000;
 
 export interface SyncViewState {
   status: SyncStatus;
@@ -86,7 +86,6 @@ export class SyncService {
   private deliveryTimer?: number;
   private reconnectTimer?: number;
   private reconnectAttemptInFlight = false;
-  private lastReconnectRestartAt = 0;
   private lastResumeRestartAt = 0;
   private hiddenAt?: number;
   private restartPromise?: Promise<void>;
@@ -144,9 +143,11 @@ export class SyncService {
         await this.start(this.secret, this.device);
         return;
       }
-      if (Date.now() - this.lastReconnectRestartAt < minimumReconnectRestartIntervalMs) return;
-      this.lastReconnectRestartAt = Date.now();
-      await this.restartRoom();
+      // Keep the room and its relay subscriptions alive. Trystero already
+      // runs a startup/steady announcement schedule; repeatedly leaving and
+      // rejoining here can leave the other phone with a stale shared-peer
+      // binding and make both sides wait forever.
+      this.setState({ status: "connecting", peerCount: 0 });
     } finally {
       this.reconnectAttemptInFlight = false;
     }
@@ -362,8 +363,11 @@ export class SyncService {
             "wss://relay.nostrdice.com",
             "wss://nostr.sathoarder.com",
             "wss://nostr.tegila.com.br",
+            "wss://relay.agorist.space",
+            "wss://nostr.vulpem.com",
           ],
         },
+        rtcPolyfill: KeepPristineOfferPeerConnection,
       },
       roomId,
       {
@@ -374,7 +378,6 @@ export class SyncService {
       },
     );
     this.room = room;
-    this.lastReconnectRestartAt = Date.now();
     this.startDeliveryWatch();
     const [sendHello, onHello] = makeMessageAction(room, "hello");
     const [sendOperations, onOperations] = makeMessageAction(room, "operations");
