@@ -37,4 +37,4 @@ The included Pages workflow builds and deploys `dist/`. In the repository settin
 4. Add products from the Products tab. No sample business data is shipped.
 5. Export a local backup from Settings after entering initial data.
 
-To connect a second iPhone, choose **Invite second device** in Settings, send the private invitation directly to that phone, and open it there. Both apps must be open at the same time for WebRTC to exchange queued operations.
+To connect a second iPhone, open Settings and choose **Show invitation QR code**, then scan it with the other phone's camera. You can also send or copy the private invitation link from the same screen. Both apps must be open at the same time for WebRTC to exchange queued operations.
