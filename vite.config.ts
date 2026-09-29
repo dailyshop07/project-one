@@ -17,7 +17,9 @@ export default defineConfig({
         short_name: "Daily Shop",
         description: "A private, local-first daily operations app.",
         lang: "zh-CN",
-        start_url: "./",
+        // An empty value makes supporting browsers use the page being installed,
+        // including its one-time invitation fragment, instead of a fixed root URL.
+        start_url: "",
         scope: "./",
         display: "standalone",
         orientation: "portrait-primary",
