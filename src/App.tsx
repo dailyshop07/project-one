@@ -20,7 +20,6 @@ const formatTobaccoSpec = (grams?: number) => grams && grams >= 1000 && grams % 
 
 const syncService = new SyncService(repository);
 const EMPTY_SYNC: SyncViewState = { status: navigator.onLine ? "local" : "offline", peerCount: 0 };
-const backgroundReloadThresholdMs = 1_500;
 
 const centsFromInput = (value: FormDataEntryValue | string | null) => Math.max(0, Math.round(Number(value || 0) * 100));
 const optionalCentsFromInput = (value: FormDataEntryValue | string | null) => {
@@ -187,43 +186,21 @@ function useAppData() {
     initialized.current = true;
     let active = true;
     let stopAutomaticBackups: (() => void) | undefined;
-    let backgroundedAt: number | undefined;
-    let reloadingAfterBackground = false;
     const unsubscribeData = repository.subscribe(() => void refresh());
     const unsubscribeSync = syncService.subscribe((next) => active && setSync(next));
-    const markBackgrounded = () => {
-      backgroundedAt ??= Date.now();
-      syncService.handleHidden();
-    };
-    const resumeFromBackground = () => {
-      if (document.visibilityState !== "visible" || reloadingAfterBackground) return;
-      const hiddenAt = backgroundedAt;
-      backgroundedAt = undefined;
-
-      // iOS suspends a Home Screen web app without destroying its JavaScript
-      // realm. Trystero/WebRTC then resumes with stale singleton and peer state,
-      // whereas a cold launch gets a fresh realm and reconnects immediately.
-      // Rebuild the page runtime after a real background suspension so resume
-      // follows the same reliable path as tapping a freshly closed app.
-      if (hiddenAt !== undefined && Date.now() - hiddenAt >= backgroundReloadThresholdMs) {
-        reloadingAfterBackground = true;
-        window.location.reload();
-        return;
-      }
-      void syncService.handleOnline();
-    };
-    const onOnline = () => {
-      if (document.visibilityState === "visible") resumeFromBackground();
-    };
+    const onOnline = () => void syncService.handleOnline();
     const onOffline = () => syncService.handleOffline();
-    const onVisible = () => document.visibilityState === "visible" ? resumeFromBackground() : markBackgrounded();
-    const onResume = () => resumeFromBackground();
+    const onVisible = () => document.visibilityState === "visible" ? void syncService.handleOnline() : syncService.handleHidden();
+    const onResume = () => void syncService.handleOnline();
+    const onHidden = () => syncService.handleHidden();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     window.addEventListener("focus", onResume);
     window.addEventListener("pageshow", onResume);
-    window.addEventListener("pagehide", markBackgrounded);
+    window.addEventListener("pagehide", onHidden);
     document.addEventListener("visibilitychange", onVisible);
+    document.addEventListener("freeze", onHidden);
+    document.addEventListener("resume", onResume);
 
     void (async () => {
       try {
@@ -258,8 +235,10 @@ function useAppData() {
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("focus", onResume);
       window.removeEventListener("pageshow", onResume);
-      window.removeEventListener("pagehide", markBackgrounded);
+      window.removeEventListener("pagehide", onHidden);
       document.removeEventListener("visibilitychange", onVisible);
+      document.removeEventListener("freeze", onHidden);
+      document.removeEventListener("resume", onResume);
       syncService.stop();
     };
   }, [refresh]);
