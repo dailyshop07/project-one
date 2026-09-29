@@ -464,6 +464,45 @@ describe("local-first business transactions", () => {
   });
 });
 
+describe("pairing recovery", () => {
+  it("adopts an invitation when a newly installed app only has an empty local identity", async () => {
+    const repository = makeRepository("empty-invite-adoption");
+    const original = await repository.initialize();
+    const invitedSecret = "A".repeat(43);
+
+    const identity = await repository.initialize(invitedSecret);
+
+    expect(identity.inviteIgnored).toBe(false);
+    expect(identity.pairing.secret).toBe(invitedSecret);
+    expect(identity.pairing.secret).not.toBe(original.pairing.secret);
+    expect((await repository.snapshot()).pairing.secret).toBe(invitedSecret);
+  });
+
+  it("does not silently switch an installation that already contains business data", async () => {
+    const repository = makeRepository("used-invite-protection");
+    const original = await repository.initialize();
+    await repository.saveProduct(productInput);
+
+    const identity = await repository.initialize("B".repeat(43));
+
+    expect(identity.inviteIgnored).toBe(true);
+    expect(identity.pairing.secret).toBe(original.pairing.secret);
+  });
+
+  it("allows an explicit pairing repair and clears remembered peers", async () => {
+    const repository = makeRepository("explicit-pairing-repair");
+    await repository.initialize();
+    await repository.rememberPeer("old-peer", "Old phone");
+
+    const invitedSecret = "C".repeat(43);
+    await repository.replacePairingSecret(invitedSecret);
+    const snapshot = await repository.snapshot();
+
+    expect(snapshot.pairing.secret).toBe(invitedSecret);
+    expect(snapshot.peers).toEqual([]);
+  });
+});
+
 describe("idempotent two-device operation sync", () => {
   it("ignores duplicate operations and converges after both devices sell offline", async () => {
     const a = makeRepository("device-a");

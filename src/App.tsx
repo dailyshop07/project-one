@@ -3,7 +3,7 @@ import QRCode from "qrcode";
 import { startAutomaticBackups } from "./backup/automaticBackup";
 import { backupReminderWeekdays, checkBackupReminder, DEFAULT_BACKUP_REMINDER_SETTINGS, loadBackupReminderSettings, recordBackupExport, saveBackupReminderSettings, type BackupReminderDue, type BackupReminderSettings } from "./backup/backupReminder";
 import { repository } from "./db/repository";
-import { SyncService, clearPairingSecretFromLocation, createInviteUrl, pairingSecretFromLocation, type SyncViewState } from "./sync/syncService";
+import { SyncService, clearPairingSecretFromLocation, createInviteUrl, pairingSecretFromLocation, pairingSecretFromText, shouldKeepPairingSecretForInstall, type SyncViewState } from "./sync/syncService";
 import type { AppSnapshot, BackupDocument, CartItem, DailyTurnover, InventoryMovement, LocalBackupRecord, Product, Sale, SaleItem, UnitType } from "./types";
 import { activeSales, categoryName, formatDateHeading, formatMoney, formatProductStock, formatTime, localDateKey, productBaseUnitLabel, productBundleUnitLabel, productHasBundle, productUnitLabel, saleSummary, stockMap, thresholdCartons } from "./utils/format";
 import { displayCostCentsAtAverage, inventoryCostStates, inventoryValueCentsAtAverage } from "./utils/cost";
@@ -186,7 +186,7 @@ function useAppData() {
       try {
         const invitedSecret = pairingSecretFromLocation();
         const identity = await repository.initialize(invitedSecret);
-        clearPairingSecretFromLocation();
+        if (!shouldKeepPairingSecretForInstall()) clearPairingSecretFromLocation();
         if (!active) return;
         await refresh();
         stopAutomaticBackups = startAutomaticBackups();
@@ -230,6 +230,7 @@ export function App() {
   const [cartTotalEditorOpen, setCartTotalEditorOpen] = useState(false);
   const [turnoverDate, setTurnoverDate] = useState<string | null>(null);
   const [turnoverField, setTurnoverField] = useState<TurnoverField>("cash");
+  const [installGuideOpen, setInstallGuideOpen] = useState(() => Boolean(pairingSecretFromLocation() && shouldKeepPairingSecretForInstall()));
 
   const notify = (message: string, kind: Notice["kind"] = "success") => {
     setNotice({ message, kind });
@@ -311,6 +312,7 @@ export function App() {
       <BottomNav active={tab} onChange={setTab} />
 
       {settingsOpen && <SettingsSheet data={data} sync={sync} onClose={() => setSettingsOpen(false)} onNotice={notify} />}
+      {installGuideOpen && <InviteInstallSheet onClose={() => setInstallGuideOpen(false)} />}
       {backupReminder && <BackupReminderSheet onClose={clearBackupReminder} onNotice={notify} onExport={() => downloadBackupFile("project-one-weekly-backup")} />}
       {categoryEditorOpen && <CategorySheet data={data} onClose={() => setCategoryEditorOpen(false)} onAdd={(input) => mutate(() => repository.createCategory(input), "类别已新增")} onDelete={(id) => mutate(() => repository.deleteCategory(id), "类别已删除")} />}
       {supplierEditorOpen && <SupplierSheet data={data} onClose={() => setSupplierEditorOpen(false)} onAdd={(name) => mutate(() => repository.createSupplier(name), "供应商已新增")} onDelete={(id) => mutate(() => repository.deleteSupplier(id), "供应商已删除")} />}
@@ -1178,12 +1180,48 @@ function InviteQrSheet({ secret, onClose, onNotice, onShare }: { secret: string;
   return <Sheet title="扫码邀请设备" onClose={onClose}><div className="invite-qr-sheet"><p className="invite-qr-lead">请让另一台手机打开相机，对准下面的二维码。扫码后会自动加入这组数据。</p><div className="invite-qr-frame">{qrDataUrl ? <img src={qrDataUrl} alt="Project One 私密邀请二维码" /> : qrError ? <p className="invite-qr-error">二维码生成失败，请使用下面的分享方式。</p> : <span className="invite-qr-loading">正在生成二维码…</span>}</div><p className="privacy-note">二维码只在本机生成，内容是当前设备的私密邀请链接。请不要转发给不相关的人。</p><div className="invite-qr-actions"><button className="secondary-button" type="button" onClick={() => void copyInvite()}>复制邀请链接</button><button className="primary-button" type="button" onClick={() => void onShare()}>发送邀请链接</button></div></div></Sheet>;
 }
 
+function InviteInstallSheet({ onClose }: { onClose: () => void }) {
+  return <Sheet title="安装并保持连接" onClose={onClose}><div className="invite-install-sheet"><div className="invite-install-icon">✓</div><h3>邀请已经收到</h3><p>如果要放到 iPhone 主屏幕，请现在完成下面两步。这个页面会保留连接信息。</p><ol><li>点 Safari 底部的“分享”按钮</li><li>选择“添加到主屏幕”，再从新图标打开</li></ol><button className="secondary-button" type="button" onClick={onClose}>暂时继续使用 Safari</button></div></Sheet>;
+}
+
+function PairingInputSheet({ onClose, onNotice }: { onClose: () => void; onNotice: (message: string, kind?: Notice["kind"]) => void }) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const paste = async () => {
+    try {
+      setValue(await navigator.clipboard.readText());
+    } catch {
+      onNotice("无法读取剪贴板，请长按输入框粘贴", "error");
+    }
+  };
+  const reconnect = async () => {
+    const secret = pairingSecretFromText(value);
+    if (!secret) {
+      onNotice("邀请链接无效，请粘贴完整链接", "error");
+      return;
+    }
+    if (!window.confirm("重新连接后，这台手机会加入邀请人的数据组。确定继续吗？")) return;
+    setBusy(true);
+    try {
+      await repository.replacePairingSecret(secret);
+      syncService.stop();
+      onNotice("连接信息已更新，正在重新打开");
+      window.setTimeout(() => location.reload(), 400);
+    } catch (reason) {
+      setBusy(false);
+      onNotice(reason instanceof Error ? reason.message : "重新连接失败", "error");
+    }
+  };
+  return <Sheet title="使用邀请链接连接" onClose={onClose}><div className="pairing-input-sheet"><p>在另一台手机复制邀请链接，然后粘贴到这里。适合已经添加到主屏幕但没有连上的情况。</p><textarea value={value} onChange={(event) => setValue(event.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="粘贴完整邀请链接" /><button className="secondary-button" type="button" onClick={() => void paste()}>从剪贴板粘贴</button><button className="primary-button" type="button" disabled={busy || !value.trim()} onClick={() => void reconnect()}>{busy ? "正在重新连接…" : "重新连接"}</button></div></Sheet>;
+}
+
 function SettingsSheet({ data, sync, onClose, onNotice }: { data: AppSnapshot; sync: SyncViewState; onClose: () => void; onNotice: (message: string, kind?: Notice["kind"]) => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [localBackups, setLocalBackups] = useState<LocalBackupRecord[]>([]);
   const [backupBusy, setBackupBusy] = useState(false);
   const [reminderSettings, setReminderSettings] = useState<BackupReminderSettings>(DEFAULT_BACKUP_REMINDER_SETTINGS);
   const [inviteQrOpen, setInviteQrOpen] = useState(false);
+  const [pairingInputOpen, setPairingInputOpen] = useState(false);
   const refreshLocalBackups = useCallback(async () => {
     setLocalBackups(await repository.listLocalBackups());
   }, []);
@@ -1256,10 +1294,11 @@ function SettingsSheet({ data, sync, onClose, onNotice }: { data: AppSnapshot; s
   };
   const shareInvite = async () => { const url = createInviteUrl(data.pairing.secret); try { if (navigator.share) await navigator.share({ title: "Project One", text: "在第二台设备上打开此私密邀请。", url }); else { await navigator.clipboard.writeText(url); onNotice("邀请链接已复制"); } } catch (reason) { if ((reason as DOMException)?.name !== "AbortError") onNotice("无法分享邀请链接", "error"); } };
   const importFile = async (file?: File) => { if (!file) return; try { await downloadBackupFile("project-one-before-import"); const backup = JSON.parse(await file.text()) as BackupDocument; await repository.importBackup(backup); await syncService.notifyLocalChange(); onNotice("备份已导入，导入前快照已下载"); } catch (reason) { onNotice(reason instanceof Error ? reason.message : "导入失败", "error"); } finally { if (fileRef.current) fileRef.current.value = ""; } };
-  const statusText = sync.status === "connected" ? "已连接" : sync.status === "syncing" ? "同步中" : sync.status === "offline" ? "离线" : data.pendingCount ? "待同步" : "本机";
+  const statusText = sync.status === "connected" ? "已连接" : sync.status === "syncing" ? "同步中" : sync.status === "connecting" ? "正在连接" : sync.status === "pending" ? "等待另一台设备" : sync.status === "offline" ? "离线" : sync.status === "error" ? "正在重试" : data.pendingCount ? "待同步" : "本机";
+  const connectionDetail = data.pendingCount ? `${data.pendingCount} 项等待同步` : sync.lastSyncedAt ? `最后同步 ${formatTime(sync.lastSyncedAt)}` : sync.status === "connecting" ? "首次连接通常需要几秒" : sync.status === "pending" ? "请让另一台手机也保持打开" : "本机数据已安全保存";
   const backupKindLabel = (record: LocalBackupRecord) => record.kind === "daily" ? "每日自动备份" : record.kind === "manual" ? "手动备份" : "恢复前保护备份";
   const latestBackup = localBackups[0];
-  return <><Sheet title="设置" onClose={onClose}><div className="settings-list"><section><h3>设备连接</h3><div className="setting-row"><span><strong>{statusText}</strong><small>{data.pendingCount ? `${data.pendingCount} 项等待同步` : sync.lastSyncedAt ? `最后同步 ${formatTime(sync.lastSyncedAt)}` : "本机数据已安全保存"}</small></span><span className={`connection-dot ${sync.status}`} /></div><button className="setting-button" onClick={() => setInviteQrOpen(true)}>显示邀请二维码</button><button className="setting-button" onClick={() => void shareInvite()}>发送邀请链接</button><p className="privacy-note">让另一台手机扫码即可加入；二维码和邀请链接都包含私密连接信息，请只通过可信方式发送。</p></section><section><h3>备份</h3><div className="setting-row"><span><strong>每天晚上 8 点后自动备份</strong><small>{latestBackup ? `最近：${new Date(latestBackup.createdAt).toLocaleString("zh-CN")} · 共 ${localBackups.length} 份` : "应用会在 20:00 后首次打开时补做备份"}</small></span><span className="backup-status-dot" /></div><button className="setting-button" disabled={backupBusy} onClick={() => void createManualBackup()}>立即保存一份本机备份</button><button className="setting-button" onClick={() => void downloadBackupFile()}>导出备份到文件</button><button className="setting-button" onClick={() => fileRef.current?.click()}>从文件导入备份</button><input ref={fileRef} className="hidden-input" type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])} /><div className="backup-history">{localBackups.length ? localBackups.map((record) => <div className="backup-history-row" key={record.id}><span><strong>{backupKindLabel(record)}</strong><small>{new Date(record.createdAt).toLocaleString("zh-CN")}</small></span><button type="button" disabled={backupBusy} onClick={() => void restoreLocalBackup(record)}>恢复</button></div>) : <p className="backup-empty">还没有自动备份。每天 20:00 后打开应用就会生成第一份。</p>}</div><p className="privacy-note">自动备份保存在本机浏览器存储，不会上传网络；清除 Safari 网站数据或卸载应用后，本机备份也会消失，重要时请导出到“文件”。</p></section><section><h3>备份提醒</h3><label className="reminder-control"><span><strong>提醒频率</strong><small>默认每周一次，在下次打开应用时提醒</small></span><select value={reminderSettings.frequency} onChange={(event) => void updateReminderSettings({ frequency: event.target.value as BackupReminderSettings["frequency"] })}><option value="weekly">每周一次</option><option value="daily">每天一次</option><option value="off">关闭提醒</option></select></label>{reminderSettings.frequency === "weekly" && <label className="reminder-control"><span><strong>提醒星期</strong><small>默认周日下午</small></span><select value={reminderSettings.weekday} onChange={(event) => void updateReminderSettings({ weekday: Number(event.target.value) })}>{backupReminderWeekdays.map((weekday, index) => <option value={index} key={weekday}>{weekday}</option>)}</select></label>}<label className="reminder-control"><span><strong>提醒时间</strong><small>默认 12:00 以后</small></span><input type="time" value={reminderSettings.time} onChange={(event) => void updateReminderSettings({ time: event.target.value })} /></label><p className="privacy-note">这是应用内提醒，不是 iPhone 锁屏通知；如果应用关闭，会在设定时间之后下一次打开时显示一次。</p></section><section><h3>本机信息</h3><DeviceNameInput value={data.device.label} onSave={(label) => void repository.updateDeviceLabel(label)} /><div className="setting-row"><span><strong>设备 ID</strong><small>{data.device.deviceId.slice(0, 8)}</small></span></div><p className="privacy-note">每笔销售会保留本机名称，用来标记是谁在这台设备上记账。</p>{data.conflictCount > 0 && <p className="privacy-note">已自动处理 {data.conflictCount} 次同时修改冲突。</p>}</section><section className="danger-section"><h3>数据操作</h3><div className="data-action-buttons"><button className="setting-button" disabled={backupBusy} onClick={() => void exportManualBackup()}>备份</button><button className="setting-button danger" disabled={backupBusy} onClick={() => void resetBusinessData()}>数据重置</button></div><p className="privacy-note">重置前请先点击“备份”，确认后本机业务数据会被清空。</p></section></div></Sheet>{inviteQrOpen && <InviteQrSheet secret={data.pairing.secret} onClose={() => setInviteQrOpen(false)} onNotice={onNotice} onShare={shareInvite} />}</>;
+  return <><Sheet title="设置" onClose={onClose}><div className="settings-list"><section><h3>设备连接</h3><div className="setting-row"><span><strong>{statusText}</strong><small>{connectionDetail}</small></span><span className={`connection-dot ${sync.status}`} /></div><button className="setting-button" onClick={() => setInviteQrOpen(true)}>显示邀请二维码</button><button className="setting-button" onClick={() => void shareInvite()}>发送邀请链接</button><button className="setting-button" onClick={() => setPairingInputOpen(true)}>粘贴邀请链接重新连接</button><p className="privacy-note">两台手机需要同时打开 Daily Shop。首次连接可能需要几秒；超过 20 秒会自动重试。二维码和邀请链接包含私密连接信息，请只发送给可信的人。</p></section><section><h3>备份</h3><div className="setting-row"><span><strong>每天晚上 8 点后自动备份</strong><small>{latestBackup ? `最近：${new Date(latestBackup.createdAt).toLocaleString("zh-CN")} · 共 ${localBackups.length} 份` : "应用会在 20:00 后首次打开时补做备份"}</small></span><span className="backup-status-dot" /></div><button className="setting-button" disabled={backupBusy} onClick={() => void createManualBackup()}>立即保存一份本机备份</button><button className="setting-button" onClick={() => void downloadBackupFile()}>导出备份到文件</button><button className="setting-button" onClick={() => fileRef.current?.click()}>从文件导入备份</button><input ref={fileRef} className="hidden-input" type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])} /><div className="backup-history">{localBackups.length ? localBackups.map((record) => <div className="backup-history-row" key={record.id}><span><strong>{backupKindLabel(record)}</strong><small>{new Date(record.createdAt).toLocaleString("zh-CN")}</small></span><button type="button" disabled={backupBusy} onClick={() => void restoreLocalBackup(record)}>恢复</button></div>) : <p className="backup-empty">还没有自动备份。每天 20:00 后打开应用就会生成第一份。</p>}</div><p className="privacy-note">自动备份保存在本机浏览器存储，不会上传网络；清除 Safari 网站数据或卸载应用后，本机备份也会消失，重要时请导出到“文件”。</p></section><section><h3>备份提醒</h3><label className="reminder-control"><span><strong>提醒频率</strong><small>默认每周一次，在下次打开应用时提醒</small></span><select value={reminderSettings.frequency} onChange={(event) => void updateReminderSettings({ frequency: event.target.value as BackupReminderSettings["frequency"] })}><option value="weekly">每周一次</option><option value="daily">每天一次</option><option value="off">关闭提醒</option></select></label>{reminderSettings.frequency === "weekly" && <label className="reminder-control"><span><strong>提醒星期</strong><small>默认周日下午</small></span><select value={reminderSettings.weekday} onChange={(event) => void updateReminderSettings({ weekday: Number(event.target.value) })}>{backupReminderWeekdays.map((weekday, index) => <option value={index} key={weekday}>{weekday}</option>)}</select></label>}<label className="reminder-control"><span><strong>提醒时间</strong><small>默认 12:00 以后</small></span><input type="time" value={reminderSettings.time} onChange={(event) => void updateReminderSettings({ time: event.target.value })} /></label><p className="privacy-note">这是应用内提醒，不是 iPhone 锁屏通知；如果应用关闭，会在设定时间之后下一次打开时显示一次。</p></section><section><h3>本机信息</h3><DeviceNameInput value={data.device.label} onSave={(label) => void repository.updateDeviceLabel(label)} /><div className="setting-row"><span><strong>设备 ID</strong><small>{data.device.deviceId.slice(0, 8)}</small></span></div><p className="privacy-note">每笔销售会保留本机名称，用来标记是谁在这台设备上记账。</p>{data.conflictCount > 0 && <p className="privacy-note">已自动处理 {data.conflictCount} 次同时修改冲突。</p>}</section><section className="danger-section"><h3>数据操作</h3><div className="data-action-buttons"><button className="setting-button" disabled={backupBusy} onClick={() => void exportManualBackup()}>备份</button><button className="setting-button danger" disabled={backupBusy} onClick={() => void resetBusinessData()}>数据重置</button></div><p className="privacy-note">重置前请先点击“备份”，确认后本机业务数据会被清空。</p></section></div></Sheet>{inviteQrOpen && <InviteQrSheet secret={data.pairing.secret} onClose={() => setInviteQrOpen(false)} onNotice={onNotice} onShare={shareInvite} />}{pairingInputOpen && <PairingInputSheet onClose={() => setPairingInputOpen(false)} onNotice={onNotice} />}</>;
 }
 
 function DeviceNameInput({ value, onSave }: { value: string; onSave: (value: string) => void }) {
