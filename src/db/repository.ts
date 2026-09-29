@@ -962,7 +962,7 @@ export class Repository {
   }
 
   async pendingOperations(limit = 100) {
-    return this.database.syncOutbox.where("status").anyOf("pending", "sending").sortBy("createdAt").then((items) => items.slice(0, limit));
+    return this.database.syncOutbox.where("status").equals("pending").sortBy("createdAt").then((items) => items.slice(0, limit));
   }
 
   async markSending(operationIds: string[]) {
@@ -1002,7 +1002,13 @@ export class Repository {
   }
 
   async markPeerSynced(deviceId: string) {
-    await this.database.peers.where("deviceId").equals(deviceId).modify({ lastSeenAt: nowIso(), lastSyncedAt: nowIso() });
+    const timestamp = nowIso();
+    await this.database.peers.where("deviceId").equals(deviceId).modify({ lastSeenAt: timestamp, lastSyncedAt: timestamp });
+    this.emit();
+  }
+
+  async forgetPeer(deviceId: string) {
+    await this.database.peers.delete(deviceId);
     this.emit();
   }
 
