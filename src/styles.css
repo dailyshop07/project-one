@@ -484,6 +484,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .invite-qr-sheet .privacy-note { max-width: 390px; padding: 0; text-align: center; }
 .invite-qr-actions { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .invite-qr-actions button { width: 100%; margin-top: 0; }
+.invite-install-sheet, .pairing-input-sheet { display: grid; gap: 12px; padding: 8px 2px; }
+.invite-install-sheet { justify-items: center; text-align: center; }
+.invite-install-icon { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 18px; background: var(--green-soft); color: var(--green); font-size: 27px; font-weight: 800; }
+.invite-install-sheet h3 { margin: 0; font-size: 19px; }
+.invite-install-sheet p, .pairing-input-sheet p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.invite-install-sheet ol { width: 100%; margin: 0; padding: 12px 14px 12px 36px; border-radius: 13px; background: white; color: var(--ink); text-align: left; font-size: 14px; line-height: 1.9; }
+.invite-install-sheet button, .pairing-input-sheet button { width: 100%; margin-top: 0; }
+.pairing-input-sheet textarea { min-height: 112px; width: 100%; resize: vertical; border: 1px solid #dfe1dc; border-radius: 13px; padding: 12px; background: white; font-size: 13px; line-height: 1.45; }
+.pairing-input-sheet .primary-button:disabled { opacity: .5; }
 .reminder-control { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #ecece8; background: white; }
 .reminder-control span { min-width: 0; }
 .reminder-control span strong, .reminder-control span small { display: block; }
