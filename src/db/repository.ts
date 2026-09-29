@@ -1,6 +1,6 @@
 import Dexie from "dexie";
 import { db, type ProjectOneDatabase } from "./database";
-import { ensureIdentity, randomId, randomSecret } from "./identity";
+import { ensureIdentity, randomId, randomSecret, validPairingSecret } from "./identity";
 import { localDateKey } from "../utils/format";
 import { averageCostCentsForProduct, inventoryCostStates } from "../utils/cost";
 import { BUILTIN_CATEGORIES } from "../types";
@@ -141,7 +141,11 @@ export class Repository {
 
   async initialize(invitedSecret?: string) {
     await this.database.open();
-    const identity = await ensureIdentity(invitedSecret, this.database);
+    let identity = await ensureIdentity(invitedSecret, this.database);
+    if (identity.inviteIgnored && invitedSecret && await this.isEmptyInstallation()) {
+      await this.replacePairingSecret(invitedSecret);
+      identity = { ...identity, pairing: { id: "pairing", secret: invitedSecret, createdAt: nowIso() }, inviteIgnored: false };
+    }
     await this.database.transaction("rw", this.database.currentCart, this.database.syncOutbox, async () => {
       if (!(await this.database.currentCart.get("current"))) {
         await this.database.currentCart.add({ id: "current", items: [], updatedAt: nowIso() });
@@ -152,6 +156,30 @@ export class Repository {
       await this.ensureBuiltinCategories(identity.device.deviceId);
     });
     return identity;
+  }
+
+  private async isEmptyInstallation() {
+    const [products, suppliers, sales, inventoryMovements, dailyTurnovers, cart] = await Promise.all([
+      this.database.products.count(),
+      this.database.suppliers.count(),
+      this.database.sales.count(),
+      this.database.inventoryMovements.count(),
+      this.database.dailyTurnovers.count(),
+      this.database.currentCart.get("current"),
+    ]);
+    return products + suppliers + sales + inventoryMovements + dailyTurnovers === 0 && !(cart?.items.length);
+  }
+
+  async replacePairingSecret(secret: string) {
+    if (!validPairingSecret(secret)) throw new Error("邀请链接无效，请重新复制完整链接。");
+    const current = await this.database.pairing.get("pairing");
+    if (current?.secret === secret) return;
+    await this.database.transaction("rw", [this.database.pairing, this.database.peers, this.database.syncOutbox], async () => {
+      await this.database.pairing.put({ id: "pairing", secret, createdAt: nowIso() });
+      await this.database.peers.clear();
+      await this.database.syncOutbox.where("status").equals("sending").modify({ status: "pending" });
+    });
+    this.emit();
   }
 
   async snapshot(): Promise<AppSnapshot> {
