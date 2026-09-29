@@ -475,6 +475,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .backup-reminder h3 { margin: 3px 0 0; color: var(--ink); font-size: 18px; }
 .backup-reminder p { margin: 0 0 5px; color: var(--muted); font-size: 13px; line-height: 1.55; }
 .backup-reminder .primary-button, .backup-reminder .text-danger { width: 100%; }
+.invite-qr-sheet { display: grid; justify-items: center; gap: 12px; padding: 4px 0 8px; text-align: center; }
+.invite-qr-lead { max-width: 340px; margin: 0; color: var(--ink); font-size: 14px; line-height: 1.55; }
+.invite-qr-frame { width: min(78vw, 300px); aspect-ratio: 1; display: grid; place-items: center; padding: 10px; border: 1px solid #dceae4; border-radius: 18px; background: white; box-shadow: 0 8px 24px rgba(35,48,42,.08); }
+.invite-qr-frame img { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.invite-qr-loading, .invite-qr-error { padding: 22px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.invite-qr-error { color: var(--danger); }
+.invite-qr-sheet .privacy-note { max-width: 390px; padding: 0; text-align: center; }
+.invite-qr-actions { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.invite-qr-actions button { width: 100%; margin-top: 0; }
 .reminder-control { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #ecece8; background: white; }
 .reminder-control span { min-width: 0; }
 .reminder-control span strong, .reminder-control span small { display: block; }
