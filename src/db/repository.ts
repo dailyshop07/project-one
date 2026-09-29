@@ -988,6 +988,16 @@ export class Repository {
     this.emit();
   }
 
+  async requeueStaleSending(maxAgeMs = 4_000) {
+    const cutoff = Date.now() - maxAgeMs;
+    const stale = (await this.database.syncOutbox.where("status").equals("sending").toArray())
+      .filter((entry) => !entry.lastAttemptAt || new Date(entry.lastAttemptAt).getTime() <= cutoff)
+      .map((entry) => entry.operationId);
+    if (!stale.length) return 0;
+    await this.requeueOperations(stale);
+    return stale.length;
+  }
+
   async rememberPeer(deviceId: string, label: string) {
     const existing = await this.database.peers.get(deviceId);
     const timestamp = nowIso();
