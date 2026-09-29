@@ -20,6 +20,7 @@ import type {
   SaleItem,
   Supplier,
   ProductKind,
+  SyncFields,
   SyncEntityType,
   SyncOperation,
   UnitType,
@@ -92,8 +93,49 @@ const legacyBaseCostFromInput = (categoryKind: ProductKind | undefined, cartonCo
   const cartonCost = cartonCostCents ?? (packCostCentsValue ?? 0) * packsPerCarton;
   return Math.max(0, Math.round(cartonCost / Math.max(1, packsPerCarton)));
 };
-const isSyncFields = (value: unknown): value is { version: number; updatedAt: string; deviceId: string } =>
-  Boolean(value && typeof value === "object" && "version" in value && "updatedAt" in value && "deviceId" in value);
+const nonEmptyString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+const isSyncFields = (value: unknown): value is SyncFields => {
+  const fields = value as Partial<SyncFields> | null;
+  return Boolean(
+    fields
+    && nonEmptyString(fields.id)
+    && nonEmptyString(fields.createdAt)
+    && nonEmptyString(fields.updatedAt)
+    && nonEmptyString(fields.deviceId)
+    && Number.isInteger(fields.version)
+    && fields.version! > 0,
+  );
+};
+
+function normalizeLegacySyncPayload(
+  entityType: SyncEntityType,
+  payload: SyncOperation["payload"],
+  deviceId: string,
+  timestamp: string,
+): SyncOperation["payload"] {
+  const legacy = payload as Partial<SyncFields> & SyncOperation["payload"];
+  const eventTimestamp = "completedAt" in payload
+    ? payload.completedAt
+    : "occurredAt" in payload
+      ? payload.occurredAt
+      : undefined;
+  const createdAt = nonEmptyString(legacy.createdAt)
+    ? legacy.createdAt
+    : nonEmptyString(eventTimestamp)
+      ? eventTimestamp
+      : timestamp;
+  const normalized = {
+    ...payload,
+    createdAt,
+    updatedAt: nonEmptyString(legacy.updatedAt) ? legacy.updatedAt : createdAt,
+    deviceId: nonEmptyString(legacy.deviceId) ? legacy.deviceId : deviceId,
+    version: Number.isInteger(legacy.version) && legacy.version! > 0 ? legacy.version : 1,
+  } as SyncOperation["payload"];
+  if (entityType === "inventoryMovement" && !nonEmptyString((normalized as InventoryMovement).operationId)) {
+    (normalized as InventoryMovement).operationId = `legacy-movement:${normalized.id}`;
+  }
+  return normalized;
+}
 
 function operationFor(
   entityType: SyncEntityType,
@@ -113,6 +155,22 @@ function operationFor(
     entityVersion,
     status: "pending",
     attempts: 0,
+  };
+}
+
+// A full-sync operation is derived from the record instead of from the
+// outbox entry. This lets a device that already acknowledged an operation
+// still provide the current record to a newly installed peer.
+function snapshotOperationFor(entityType: SyncEntityType, payload: SyncOperation["payload"]): SyncOperation {
+  return {
+    operationId: `snapshot:${entityType}:${payload.id}:${payload.version}:${payload.updatedAt}:${payload.deviceId}`,
+    entityType,
+    entityId: payload.id,
+    action: payload.deletedAt ? "tombstone" : "upsert",
+    payload,
+    createdAt: payload.updatedAt,
+    deviceId: payload.deviceId,
+    entityVersion: payload.version,
   };
 }
 
@@ -152,10 +210,50 @@ export class Repository {
       }
       await this.database.syncOutbox.where("status").equals("sending").modify({ status: "pending" });
     });
+    await this.backfillLegacySyncFields(identity.device.deviceId);
     await this.database.transaction("rw", [this.database.categories, this.database.products, this.database.syncOutbox, this.database.processedOperations], async () => {
       await this.ensureBuiltinCategories(identity.device.deviceId);
     });
     return identity;
+  }
+
+  private async backfillLegacySyncFields(deviceId: string) {
+    const tables = [
+      { entityType: "category", table: this.database.categories },
+      { entityType: "supplier", table: this.database.suppliers },
+      { entityType: "product", table: this.database.products },
+      { entityType: "sale", table: this.database.sales },
+      { entityType: "saleItem", table: this.database.saleItems },
+      { entityType: "inventoryMovement", table: this.database.inventoryMovements },
+      { entityType: "dailyTurnover", table: this.database.dailyTurnovers },
+    ] as const;
+    const timestamp = nowIso();
+    await this.database.transaction(
+      "rw",
+      [
+        this.database.categories,
+        this.database.suppliers,
+        this.database.products,
+        this.database.sales,
+        this.database.saleItems,
+        this.database.inventoryMovements,
+        this.database.dailyTurnovers,
+        this.database.syncOutbox,
+        this.database.processedOperations,
+      ],
+      async () => {
+        for (const { entityType, table } of tables) {
+          const records = await table.toArray() as SyncOperation["payload"][];
+          for (const record of records) {
+            const missingMovementId = entityType === "inventoryMovement" && !nonEmptyString((record as InventoryMovement).operationId);
+            if (isSyncFields(record) && !missingMovementId) continue;
+            const normalized = normalizeLegacySyncPayload(entityType, record, deviceId, timestamp);
+            await table.put(normalized as never);
+            await this.recordLocalOperation(operationFor(entityType, normalized, deviceId));
+          }
+        }
+      },
+    );
   }
 
   private async isEmptyInstallation() {
@@ -965,6 +1063,37 @@ export class Repository {
     return this.database.syncOutbox.where("status").equals("pending").sortBy("createdAt").then((items) => items.slice(0, limit));
   }
 
+  /**
+   * Return the current durable data as idempotent operations.
+   *
+   * The outbox is acknowledged after a peer receives an operation. It
+   * therefore cannot be used as a source of truth for a peer installed later
+   * (for example an iOS Home Screen Web App). A full snapshot handshake fills
+   * that gap without copying browser storage between Safari and the
+   * standalone app.
+   */
+  async snapshotOperations(): Promise<SyncOperation[]> {
+    const [categories, suppliers, products, sales, saleItems, inventoryMovements, dailyTurnovers] = await Promise.all([
+      this.database.categories.toArray(),
+      this.database.suppliers.toArray(),
+      this.database.products.toArray(),
+      this.database.sales.toArray(),
+      this.database.saleItems.toArray(),
+      this.database.inventoryMovements.toArray(),
+      this.database.dailyTurnovers.toArray(),
+    ]);
+    const entries: Array<[SyncEntityType, SyncOperation["payload"]]> = [
+      ...categories.map((payload) => ["category", payload] as [SyncEntityType, SyncOperation["payload"]]),
+      ...suppliers.map((payload) => ["supplier", payload] as [SyncEntityType, SyncOperation["payload"]]),
+      ...products.map((payload) => ["product", payload] as [SyncEntityType, SyncOperation["payload"]]),
+      ...sales.map((payload) => ["sale", payload] as [SyncEntityType, SyncOperation["payload"]]),
+      ...saleItems.map((payload) => ["saleItem", payload] as [SyncEntityType, SyncOperation["payload"]]),
+      ...inventoryMovements.map((payload) => ["inventoryMovement", payload] as [SyncEntityType, SyncOperation["payload"]]),
+      ...dailyTurnovers.map((payload) => ["dailyTurnover", payload] as [SyncEntityType, SyncOperation["payload"]]),
+    ];
+    return entries.map(([entityType, payload]) => snapshotOperationFor(entityType, payload));
+  }
+
   async markSending(operationIds: string[]) {
     if (!operationIds.length) return;
     const timestamp = nowIso();
@@ -1102,7 +1231,9 @@ export class Repository {
               });
             }
           }
-          await this.database.processedOperations.add({
+          // A full snapshot can be retried or arrive at the same time as a
+          // second relay delivery. `put` keeps that retry idempotent.
+          await this.database.processedOperations.put({
             operationId: operation.operationId,
             processedAt: nowIso(),
             sourceDeviceId: operation.deviceId,
