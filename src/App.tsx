@@ -46,6 +46,14 @@ const weightFromNameInput = (value: string) => {
   return Number.isFinite(number) ? Math.max(1, Math.round(number * (/kg|公斤/i.test(match[2]) ? 1000 : 1))) : undefined;
 };
 const triggerTapHaptic = () => undefined;
+const isEmptyBusinessSnapshot = (snapshot: AppSnapshot) =>
+  snapshot.products.length === 0 &&
+  snapshot.suppliers.length === 0 &&
+  snapshot.sales.length === 0 &&
+  snapshot.saleItems.length === 0 &&
+  snapshot.inventoryMovements.length === 0 &&
+  snapshot.dailyTurnovers.length === 0 &&
+  snapshot.cart.items.length === 0;
 
 const downloadBackupFile = async (prefix = "project-one-backup") => {
   const backup = await repository.exportBackup();
@@ -158,14 +166,18 @@ function useAppData() {
   const [sync, setSync] = useState<SyncViewState>(EMPTY_SYNC);
   const [backupReminder, setBackupReminder] = useState<BackupReminderDue | null>(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
+  const [showPairingRecovery, setShowPairingRecovery] = useState(false);
   const [error, setError] = useState<string>();
   const initialized = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
-      setData(await repository.snapshot());
+      const snapshot = await repository.snapshot();
+      setData(snapshot);
+      return snapshot;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "无法读取本机数据。");
+      return undefined;
     }
   }, []);
 
@@ -190,13 +202,17 @@ function useAppData() {
       try {
         const locationInviteSecret = pairingSecretFromLocation();
         if (locationInviteSecret && shouldKeepPairingSecretForInstall()) rememberPairingSecretForInstall(locationInviteSecret);
-        const invitedSecret = locationInviteSecret ?? pendingPairingSecretFromStorage();
+        const pendingSecret = pendingPairingSecretFromStorage();
+        const invitedSecret = locationInviteSecret ?? pendingSecret;
         const identity = await repository.initialize(invitedSecret);
         if (invitedSecret && !shouldKeepPairingSecretForInstall()) clearPendingPairingSecret();
         if (!shouldKeepPairingSecretForInstall()) clearPairingSecretFromLocation();
         if (!active) return;
-        await refresh();
+        const snapshot = await refresh();
         if (locationInviteSecret && shouldKeepPairingSecretForInstall()) setShowInstallGuide(true);
+        if (!shouldKeepPairingSecretForInstall() && !invitedSecret && snapshot && isEmptyBusinessSnapshot(snapshot)) {
+          setShowPairingRecovery(true);
+        }
         stopAutomaticBackups = startAutomaticBackups();
         setBackupReminder(await checkBackupReminder());
         await syncService.start(identity.pairing.secret, identity.device);
@@ -220,11 +236,11 @@ function useAppData() {
     };
   }, [refresh]);
 
-  return { data, sync, error, backupReminder, showInstallGuide, clearBackupReminder: () => setBackupReminder(null), clearError: () => setError(undefined), refresh };
+  return { data, sync, error, backupReminder, showInstallGuide, showPairingRecovery, clearBackupReminder: () => setBackupReminder(null), clearError: () => setError(undefined), refresh };
 }
 
 export function App() {
-  const { data, sync, error, backupReminder, showInstallGuide, clearBackupReminder, clearError } = useAppData();
+  const { data, sync, error, backupReminder, showInstallGuide, showPairingRecovery, clearBackupReminder, clearError } = useAppData();
   const [tab, setTab] = useState<Tab>("today");
   const [notice, setNotice] = useState<Notice>();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -241,10 +257,15 @@ export function App() {
   const [turnoverDate, setTurnoverDate] = useState<string | null>(null);
   const [turnoverField, setTurnoverField] = useState<TurnoverField>("cash");
   const [installGuideOpen, setInstallGuideOpen] = useState(false);
+  const [pairingRecoveryOpen, setPairingRecoveryOpen] = useState(false);
 
   useEffect(() => {
     if (showInstallGuide) setInstallGuideOpen(true);
   }, [showInstallGuide]);
+
+  useEffect(() => {
+    if (showPairingRecovery) setPairingRecoveryOpen(true);
+  }, [showPairingRecovery]);
 
   const notify = (message: string, kind: Notice["kind"] = "success") => {
     setNotice({ message, kind });
@@ -327,6 +348,7 @@ export function App() {
 
       {settingsOpen && <SettingsSheet data={data} sync={sync} onClose={() => setSettingsOpen(false)} onNotice={notify} />}
       {installGuideOpen && <InviteInstallSheet onClose={() => setInstallGuideOpen(false)} />}
+      {pairingRecoveryOpen && <PairingInputSheet onClose={() => setPairingRecoveryOpen(false)} onNotice={notify} />}
       {backupReminder && <BackupReminderSheet onClose={clearBackupReminder} onNotice={notify} onExport={() => downloadBackupFile("project-one-weekly-backup")} />}
       {categoryEditorOpen && <CategorySheet data={data} onClose={() => setCategoryEditorOpen(false)} onAdd={(input) => mutate(() => repository.createCategory(input), "类别已新增")} onDelete={(id) => mutate(() => repository.deleteCategory(id), "类别已删除")} />}
       {supplierEditorOpen && <SupplierSheet data={data} onClose={() => setSupplierEditorOpen(false)} onAdd={(name) => mutate(() => repository.createSupplier(name), "供应商已新增")} onDelete={(id) => mutate(() => repository.deleteSupplier(id), "供应商已删除")} />}
@@ -1195,9 +1217,9 @@ function InviteQrSheet({ secret, onClose, onNotice, onShare }: { secret: string;
 }
 
 const installGuideSteps = [
-  { title: "扫码后先保持 Safari 打开", body: "邀请已经收到，不要先关掉这个页面。接下来点 Safari 底部的分享按钮。", art: "scan", action: "下一步" },
+  { title: "扫码后保持邀请页面打开", body: "不要返回主页，也不要另开普通网址。必须在这个带有邀请链接的页面上继续安装。", art: "scan", action: "下一步" },
   { title: "点 Safari 的分享按钮", body: "在底部工具栏找到分享图标，打开系统分享菜单。", art: "share", action: "下一步" },
-  { title: "选择“添加到主屏幕”", body: "在分享菜单里点“添加到主屏幕”，然后确认添加。", art: "add", action: "下一步" },
+  { title: "选择“添加到主屏幕”", body: "在分享菜单里点“添加到主屏幕”，确认添加。安装时会把当前邀请链接交给主屏幕 App。", art: "add", action: "下一步" },
   { title: "从新图标打开 Daily Shop", body: "点主屏幕上的 Daily Shop 图标，两台手机同时打开后会自动连接。", art: "open", action: "完成" },
 ] as const;
 
@@ -1240,7 +1262,7 @@ function PairingInputSheet({ onClose, onNotice }: { onClose: () => void; onNotic
       onNotice(reason instanceof Error ? reason.message : "重新连接失败", "error");
     }
   };
-  return <Sheet title="使用邀请链接连接" onClose={onClose}><div className="pairing-input-sheet"><p>在另一台手机复制邀请链接，然后粘贴到这里。适合已经添加到主屏幕但没有连上的情况。</p><textarea value={value} onChange={(event) => setValue(event.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="粘贴完整邀请链接" /><button className="secondary-button" type="button" onClick={() => void paste()}>从剪贴板粘贴</button><button className="primary-button" type="button" disabled={busy || !value.trim()} onClick={() => void reconnect()}>{busy ? "正在重新连接…" : "重新连接"}</button></div></Sheet>;
+  return <Sheet title="完成主屏幕配对" onClose={onClose}><div className="pairing-input-sheet"><p>主屏幕 App 和 Safari 使用不同的本机存储。如果刚从邀请页面安装后没有自动连接，请从主手机复制完整邀请链接，在这里粘贴一次。</p><textarea value={value} onChange={(event) => setValue(event.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="粘贴完整邀请链接" /><button className="secondary-button" type="button" onClick={() => void paste()}>从剪贴板粘贴</button><button className="primary-button" type="button" disabled={busy || !value.trim()} onClick={() => void reconnect()}>{busy ? "正在重新连接…" : "重新连接"}</button></div></Sheet>;
 }
 
 function PeerList({ data }: { data: AppSnapshot }) {
