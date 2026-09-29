@@ -3,7 +3,7 @@ import QRCode from "qrcode";
 import { startAutomaticBackups } from "./backup/automaticBackup";
 import { backupReminderWeekdays, checkBackupReminder, DEFAULT_BACKUP_REMINDER_SETTINGS, loadBackupReminderSettings, recordBackupExport, saveBackupReminderSettings, type BackupReminderDue, type BackupReminderSettings } from "./backup/backupReminder";
 import { repository } from "./db/repository";
-import { SyncService, clearPairingSecretFromLocation, createInviteUrl, pairingSecretFromLocation, pairingSecretFromText, shouldKeepPairingSecretForInstall, type SyncViewState } from "./sync/syncService";
+import { SyncService, clearPairingSecretFromLocation, clearPendingPairingSecret, createInviteUrl, pairingSecretFromLocation, pairingSecretFromText, pendingPairingSecretFromStorage, rememberPairingSecretForInstall, shouldKeepPairingSecretForInstall, type SyncViewState } from "./sync/syncService";
 import type { AppSnapshot, BackupDocument, CartItem, DailyTurnover, InventoryMovement, LocalBackupRecord, Product, Sale, SaleItem, UnitType } from "./types";
 import { activeSales, categoryName, formatDateHeading, formatMoney, formatProductStock, formatTime, localDateKey, productBaseUnitLabel, productBundleUnitLabel, productHasBundle, productUnitLabel, saleSummary, stockMap, thresholdCartons } from "./utils/format";
 import { displayCostCentsAtAverage, inventoryCostStates, inventoryValueCentsAtAverage } from "./utils/cost";
@@ -157,6 +157,7 @@ function useAppData() {
   const [data, setData] = useState<AppSnapshot | null>(null);
   const [sync, setSync] = useState<SyncViewState>(EMPTY_SYNC);
   const [backupReminder, setBackupReminder] = useState<BackupReminderDue | null>(null);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [error, setError] = useState<string>();
   const initialized = useRef(false);
 
@@ -184,11 +185,15 @@ function useAppData() {
 
     void (async () => {
       try {
-        const invitedSecret = pairingSecretFromLocation();
+        const locationInviteSecret = pairingSecretFromLocation();
+        if (locationInviteSecret && shouldKeepPairingSecretForInstall()) rememberPairingSecretForInstall(locationInviteSecret);
+        const invitedSecret = locationInviteSecret ?? pendingPairingSecretFromStorage();
         const identity = await repository.initialize(invitedSecret);
+        if (invitedSecret && !shouldKeepPairingSecretForInstall()) clearPendingPairingSecret();
         if (!shouldKeepPairingSecretForInstall()) clearPairingSecretFromLocation();
         if (!active) return;
         await refresh();
+        if (locationInviteSecret && shouldKeepPairingSecretForInstall()) setShowInstallGuide(true);
         stopAutomaticBackups = startAutomaticBackups();
         setBackupReminder(await checkBackupReminder());
         await syncService.start(identity.pairing.secret, identity.device);
@@ -210,11 +215,11 @@ function useAppData() {
     };
   }, [refresh]);
 
-  return { data, sync, error, backupReminder, clearBackupReminder: () => setBackupReminder(null), clearError: () => setError(undefined), refresh };
+  return { data, sync, error, backupReminder, showInstallGuide, clearBackupReminder: () => setBackupReminder(null), clearError: () => setError(undefined), refresh };
 }
 
 export function App() {
-  const { data, sync, error, backupReminder, clearBackupReminder, clearError } = useAppData();
+  const { data, sync, error, backupReminder, showInstallGuide, clearBackupReminder, clearError } = useAppData();
   const [tab, setTab] = useState<Tab>("today");
   const [notice, setNotice] = useState<Notice>();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -230,7 +235,11 @@ export function App() {
   const [cartTotalEditorOpen, setCartTotalEditorOpen] = useState(false);
   const [turnoverDate, setTurnoverDate] = useState<string | null>(null);
   const [turnoverField, setTurnoverField] = useState<TurnoverField>("cash");
-  const [installGuideOpen, setInstallGuideOpen] = useState(() => Boolean(pairingSecretFromLocation() && shouldKeepPairingSecretForInstall()));
+  const [installGuideOpen, setInstallGuideOpen] = useState(false);
+
+  useEffect(() => {
+    if (showInstallGuide) setInstallGuideOpen(true);
+  }, [showInstallGuide]);
 
   const notify = (message: string, kind: Notice["kind"] = "success") => {
     setNotice({ message, kind });
