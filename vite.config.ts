@@ -13,8 +13,8 @@ export default defineConfig({
       includeAssets: ["project-one-logo-v2.png"],
       manifest: {
         id: "./",
-        name: "Project One",
-        short_name: "Project One",
+        name: "Daily Shop",
+        short_name: "Daily Shop",
         description: "A private, local-first daily operations app.",
         lang: "zh-CN",
         start_url: "./",
