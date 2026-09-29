@@ -460,6 +460,20 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .connection-dot { width: 10px; height: 10px; border-radius: 50%; background: #8c9892; }
 .connection-dot.connected, .connection-dot.syncing { background: #51a683; }
 .connection-dot.offline, .connection-dot.error { background: #ad7b72; }
+.peer-list { border-top: 1px solid #ecece8; background: #fbfcfa; }
+.peer-section-heading { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px 6px; }
+.peer-section-heading strong { color: var(--green); font-size: 12px; }
+.peer-section-heading small { color: var(--muted); font-size: 10px; }
+.peer-row { min-height: 66px; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #ecece8; }
+.peer-row:last-child { border-bottom: 0; }
+.peer-avatar { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 11px; background: var(--green-soft); color: var(--green-dark); font-size: 14px; font-weight: 800; }
+.peer-main { min-width: 0; flex: 1 1 auto; }
+.peer-main strong, .peer-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peer-main strong { font-size: 13px; }
+.peer-main small { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.peer-status { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: var(--green); font-size: 10px; font-weight: 750; }
+.peer-status i { width: 7px; height: 7px; border-radius: 50%; background: #51a683; box-shadow: 0 0 0 3px #e4f1eb; }
+.peer-empty { margin: 0; padding: 12px 14px 13px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .backup-status-dot { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; background: #51a683; box-shadow: 0 0 0 4px #e4f1eb; }
 .backup-history { display: grid; gap: 0; border-top: 1px solid #ecece8; }
 .backup-history-row { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-bottom: 1px solid #ecece8; }
@@ -486,11 +500,32 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .invite-qr-actions button { width: 100%; margin-top: 0; }
 .invite-install-sheet, .pairing-input-sheet { display: grid; gap: 12px; padding: 8px 2px; }
 .invite-install-sheet { justify-items: center; text-align: center; }
-.invite-install-icon { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 18px; background: var(--green-soft); color: var(--green); font-size: 27px; font-weight: 800; }
+.invite-install-progress { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 18px; }
+.invite-install-progress button { width: 7px; height: 7px; padding: 0; border: 0; border-radius: 50%; background: #ccd5cf; }
+.invite-install-progress button.active { width: 22px; border-radius: 999px; background: var(--green); }
+.install-guide-art { position: relative; width: 100%; min-height: 210px; display: grid; place-items: center; overflow: hidden; border: 1px solid #dceae4; border-radius: 19px; background: linear-gradient(145deg, #f1f8f4, #e7f1ec); }
+.install-guide-phone { position: relative; width: 128px; height: 188px; padding: 10px 7px; border: 5px solid #1b3d34; border-radius: 23px; background: #17352d; box-shadow: 0 12px 24px rgba(26,58,48,.18); transform: rotate(-3deg); }
+.install-guide-phone-top { position: absolute; top: 5px; left: 50%; width: 43px; height: 7px; border-radius: 0 0 7px 7px; background: #1b3d34; transform: translateX(-50%); }
+.install-guide-phone-screen { height: 100%; display: grid; align-content: center; justify-items: center; gap: 9px; border-radius: 13px; background: #fbfaf6; color: var(--green-dark); }
+.install-guide-phone-bottom { position: absolute; bottom: 3px; left: 50%; width: 35px; height: 3px; border-radius: 99px; background: #9cb7ab; transform: translateX(-50%); }
+.install-guide-screen-title { position: absolute; top: 27px; font-size: 9px; font-weight: 800; }
+.install-guide-screen-caption { font-size: 11px; font-weight: 750; }
+.install-guide-qr { display: grid; place-items: center; width: 60px; height: 60px; border: 5px solid var(--green); border-radius: 6px; font-size: 43px; line-height: 1; }
+.install-guide-share-icon { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 15px; background: var(--green-soft); color: var(--green); font-size: 34px; font-weight: 800; }
+.install-guide-menu-line { width: 91px; padding: 7px 5px; border-bottom: 1px solid #e2e8e4; font-size: 9px; font-weight: 800; text-align: left; }
+.install-guide-menu-line.muted { color: var(--muted); font-weight: 500; }
+.install-guide-app-icon { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 15px; background: var(--green); color: #fff; font-size: 17px; font-weight: 800; }
+.install-guide-bubble, .install-guide-home-badge { position: absolute; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: #fff; color: var(--green); font-size: 25px; font-weight: 800; box-shadow: 0 7px 18px rgba(23,53,45,.14); }
+.install-guide-bubble { top: 30px; right: calc(50% - 94px); }
+.install-guide-home-badge { right: calc(50% - 99px); bottom: 34px; }
+.install-guide-arrow { position: absolute; right: calc(50% - 100px); bottom: 36px; color: var(--green); font-size: 43px; font-weight: 800; transform: rotate(-10deg); }
+.install-guide-tap { position: absolute; right: calc(50% - 116px); bottom: 30px; padding: 7px 10px; border-radius: 999px; background: #fff; color: var(--green); font-size: 11px; font-weight: 800; box-shadow: 0 7px 18px rgba(23,53,45,.14); }
+.invite-install-copy { display: grid; gap: 5px; width: 100%; }
+.invite-install-copy > span { color: var(--green); font-size: 11px; font-weight: 750; }
 .invite-install-sheet h3 { margin: 0; font-size: 19px; }
 .invite-install-sheet p, .pairing-input-sheet p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
-.invite-install-sheet ol { width: 100%; margin: 0; padding: 12px 14px 12px 36px; border-radius: 13px; background: white; color: var(--ink); text-align: left; font-size: 14px; line-height: 1.9; }
 .invite-install-sheet button, .pairing-input-sheet button { width: 100%; margin-top: 0; }
+.invite-install-sheet .text-button { min-height: 32px; border: 0; background: transparent; color: var(--green); font-size: 12px; font-weight: 750; }
 .pairing-input-sheet textarea { min-height: 112px; width: 100%; resize: vertical; border: 1px solid #dfe1dc; border-radius: 13px; padding: 12px; background: white; font-size: 13px; line-height: 1.45; }
 .pairing-input-sheet .primary-button:disabled { opacity: .5; }
 .reminder-control { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #ecece8; background: white; }
