@@ -12,6 +12,8 @@ const pendingPairingMaxAgeMs = 24 * 60 * 60 * 1000;
 const snapshotBatchSize = 50;
 const pendingConnectionNoticeMs = 3_000;
 const minimumResumeRestartIntervalMs = 3_000;
+const connectionRetryIntervalMs = 1_000;
+const minimumReconnectRestartIntervalMs = 3_000;
 
 export interface SyncViewState {
   status: SyncStatus;
@@ -82,6 +84,9 @@ export class SyncService {
   private secret?: string;
   private pendingTimer?: number;
   private deliveryTimer?: number;
+  private reconnectTimer?: number;
+  private reconnectAttemptInFlight = false;
+  private lastReconnectRestartAt = 0;
   private lastResumeRestartAt = 0;
   private hiddenAt?: number;
   private restartPromise?: Promise<void>;
@@ -106,6 +111,45 @@ export class SyncService {
   private clearConnectionTimers() {
     if (this.pendingTimer !== undefined) window.clearTimeout(this.pendingTimer);
     this.pendingTimer = undefined;
+  }
+
+  private stopConnectionRetry() {
+    if (this.reconnectTimer !== undefined) window.clearInterval(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+  }
+
+  private startConnectionRetry() {
+    if (this.stopped || !navigator.onLine || !this.secret || !this.device || this.restarting || this.restartPromise) return;
+    if (this.reconnectTimer !== undefined) return;
+    this.reconnectTimer = window.setInterval(() => void this.retryConnection(), connectionRetryIntervalMs);
+  }
+
+  private async retryConnection() {
+    if (this.stopped || !navigator.onLine || !this.secret || !this.device) {
+      this.stopConnectionRetry();
+      return;
+    }
+    if (this.hasUsablePeer()) {
+      this.stopConnectionRetry();
+      this.clearConnectionTimers();
+      this.setState({ status: "connected", peerCount: Object.keys(this.room?.getPeers() ?? {}).length });
+      await this.requestFreshSnapshots();
+      return;
+    }
+    if (this.reconnectAttemptInFlight || this.restarting || this.restartPromise) return;
+
+    this.reconnectAttemptInFlight = true;
+    try {
+      if (!this.room) {
+        await this.start(this.secret, this.device);
+        return;
+      }
+      if (Date.now() - this.lastReconnectRestartAt < minimumReconnectRestartIntervalMs) return;
+      this.lastReconnectRestartAt = Date.now();
+      await this.restartRoom();
+    } finally {
+      this.reconnectAttemptInFlight = false;
+    }
   }
 
   private clearDeliveryTimer() {
@@ -246,8 +290,9 @@ export class SyncService {
   }
 
   private scheduleConnectionNotice() {
-    if (this.stopped || this.restarting || this.restartPromise || !navigator.onLine || !this.room || !this.secret || !this.device) return;
-    if (this.pendingTimer === undefined) {
+    if (this.stopped || !navigator.onLine || !this.secret || !this.device) return;
+    this.startConnectionRetry();
+    if (this.room && this.pendingTimer === undefined) {
       this.pendingTimer = window.setTimeout(() => {
         this.pendingTimer = undefined;
         if (this.room && !this.hasUsablePeer()) this.setState({ status: navigator.onLine ? "pending" : "offline", peerCount: 0 });
@@ -282,6 +327,7 @@ export class SyncService {
         if (!this.stopped && navigator.onLine) this.scheduleConnectionNotice();
       } finally {
         this.restarting = false;
+        if (!this.stopped && navigator.onLine && !this.hasUsablePeer()) this.startConnectionRetry();
       }
     })();
     this.restartPromise = restart;
@@ -328,6 +374,7 @@ export class SyncService {
       },
     );
     this.room = room;
+    this.lastReconnectRestartAt = Date.now();
     this.startDeliveryWatch();
     const [sendHello, onHello] = makeMessageAction(room, "hello");
     const [sendOperations, onOperations] = makeMessageAction(room, "operations");
@@ -346,6 +393,7 @@ export class SyncService {
 
     room.onPeerJoin = (peerId) => {
       this.clearConnectionTimers();
+      this.stopConnectionRetry();
       this.setState({ status: "connected", peerCount: Object.keys(room.getPeers()).length });
       void announcePeer(peerId);
     };
@@ -430,6 +478,7 @@ export class SyncService {
     const peers = Object.keys(room.getPeers());
     this.setState({ status: peers.length ? "connected" : "connecting", peerCount: peers.length });
     if (peers.length) {
+      this.stopConnectionRetry();
       peers.forEach((peerId) => void announcePeer(peerId));
     } else {
       this.scheduleConnectionNotice();
@@ -508,6 +557,7 @@ export class SyncService {
       return;
     }
     this.clearConnectionTimers();
+    this.stopConnectionRetry();
     this.setState({ status: "connected", peerCount: Object.keys(this.room.getPeers()).length });
     await this.requestFreshSnapshots();
   }
@@ -522,12 +572,14 @@ export class SyncService {
 
   handleOffline() {
     this.clearConnectionTimers();
+    this.stopConnectionRetry();
     this.setState({ status: "offline", peerCount: 0 });
   }
 
   stop() {
     this.stopped = true;
     this.clearConnectionTimers();
+    this.stopConnectionRetry();
     this.clearDeliveryTimer();
     this.clearSnapshotState();
     this.hiddenAt = undefined;
