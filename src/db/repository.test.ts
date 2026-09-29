@@ -504,6 +504,87 @@ describe("pairing recovery", () => {
 });
 
 describe("idempotent two-device operation sync", () => {
+  it("can bootstrap a new device from acknowledged history", async () => {
+    const source = makeRepository("snapshot-source");
+    const target = makeRepository("snapshot-target");
+    await Promise.all([source.initialize(), target.initialize()]);
+    await source.saveProduct(productInput);
+    const productId = (await source.snapshot()).products[0].id;
+    await source.addToCart(productId, "pack");
+    await source.completeSale();
+
+    const acknowledged = await source.pendingOperations(500);
+    await source.acknowledgeOperations(acknowledged.map((operation) => operation.operationId));
+    expect(await source.pendingOperations(500)).toHaveLength(0);
+
+    const snapshotOperations = await source.snapshotOperations();
+    await target.applyRemoteOperations(snapshotOperations.slice(0, 50));
+    await target.applyRemoteOperations(snapshotOperations.slice(0, 50));
+    const targetState = await target.snapshot();
+
+    expect(targetState.products).toEqual(expect.arrayContaining([expect.objectContaining({ id: productId, name: "Item A" })]));
+    expect(targetState.sales).toHaveLength(1);
+    expect(targetState.saleItems).toHaveLength(1);
+    expect(targetState.inventoryMovements.some((movement) => movement.reason === "sale")).toBe(true);
+  });
+
+  it("bootstraps a second new device after an earlier peer already received the history", async () => {
+    const source = makeRepository("snapshot-multi-source");
+    const wifePhone = makeRepository("snapshot-multi-wife");
+    const sparePhone = makeRepository("snapshot-multi-spare");
+    await Promise.all([source.initialize(), wifePhone.initialize(), sparePhone.initialize()]);
+    await source.saveProduct(productInput);
+    const productId = (await source.snapshot()).products[0].id;
+    await source.addToCart(productId, "pack");
+    await source.completeSale();
+
+    const history = await source.snapshotOperations();
+    await wifePhone.applyRemoteOperations(history);
+    await sparePhone.applyRemoteOperations(history);
+
+    const [wifeState, spareState] = await Promise.all([wifePhone.snapshot(), sparePhone.snapshot()]);
+    expect(wifeState.products).toEqual(expect.arrayContaining([expect.objectContaining({ id: productId, name: "Item A" })]));
+    expect(spareState.products).toEqual(expect.arrayContaining([expect.objectContaining({ id: productId, name: "Item A" })]));
+    expect(wifeState.sales).toHaveLength(1);
+    expect(spareState.sales).toHaveLength(1);
+    expect(spareState.inventoryMovements.some((movement) => movement.reason === "sale")).toBe(true);
+  });
+
+  it("repairs legacy records without sync metadata before bootstrapping a new phone", async () => {
+    const source = makeRepository("legacy-snapshot-source");
+    const target = makeRepository("legacy-snapshot-target");
+    await Promise.all([source.initialize(), target.initialize()]);
+    await source.saveProduct(productInput);
+    const productId = (await source.snapshot()).products[0].id;
+    await source.addToCart(productId, "pack");
+    await source.completeSale();
+
+    const stripSyncMetadata = <T extends object>(record: T, stripOperationId = false) => {
+      const legacy = { ...record } as Record<string, unknown>;
+      delete legacy.createdAt;
+      delete legacy.updatedAt;
+      delete legacy.deviceId;
+      delete legacy.version;
+      if (stripOperationId) delete legacy.operationId;
+      return legacy;
+    };
+    await source.database.products.bulkPut((await source.database.products.toArray()).map((record) => stripSyncMetadata(record)) as never);
+    await source.database.sales.bulkPut((await source.database.sales.toArray()).map((record) => stripSyncMetadata(record)) as never);
+    await source.database.saleItems.bulkPut((await source.database.saleItems.toArray()).map((record) => stripSyncMetadata(record)) as never);
+    await source.database.inventoryMovements.bulkPut((await source.database.inventoryMovements.toArray()).map((record) => stripSyncMetadata(record, true)) as never);
+
+    await source.initialize();
+    const history = await source.snapshotOperations();
+    expect(history.every((operation) => operation.deviceId && operation.entityVersion > 0 && operation.createdAt)).toBe(true);
+    await target.applyRemoteOperations(history);
+    const targetState = await target.snapshot();
+
+    expect(targetState.products).toEqual(expect.arrayContaining([expect.objectContaining({ id: productId, name: "Item A" })]));
+    expect(targetState.sales).toHaveLength(1);
+    expect(targetState.saleItems).toHaveLength(1);
+    expect(targetState.inventoryMovements.some((movement) => movement.reason === "sale")).toBe(true);
+  });
+
   it("ignores duplicate operations and converges after both devices sell offline", async () => {
     const a = makeRepository("device-a");
     const b = makeRepository("device-b");

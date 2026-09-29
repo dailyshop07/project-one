@@ -178,9 +178,12 @@ function useAppData() {
     const unsubscribeSync = syncService.subscribe((next) => active && setSync(next));
     const onOnline = () => void syncService.handleOnline();
     const onOffline = () => syncService.handleOffline();
-    const onVisible = () => document.visibilityState === "visible" && void syncService.handleOnline();
+    const onVisible = () => document.visibilityState === "visible" ? void syncService.handleOnline() : syncService.handleHidden();
+    const onResume = () => void syncService.handleOnline();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
+    window.addEventListener("focus", onResume);
+    window.addEventListener("pageshow", onResume);
     document.addEventListener("visibilitychange", onVisible);
 
     void (async () => {
@@ -210,6 +213,8 @@ function useAppData() {
       stopAutomaticBackups?.();
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
+      window.removeEventListener("focus", onResume);
+      window.removeEventListener("pageshow", onResume);
       document.removeEventListener("visibilitychange", onVisible);
       syncService.stop();
     };

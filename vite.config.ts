@@ -17,8 +17,9 @@ export default defineConfig({
         short_name: "Daily Shop",
         description: "A private, local-first daily operations app.",
         lang: "zh-CN",
-        // An empty value makes supporting browsers use the page being installed,
-        // including its one-time invitation fragment, instead of a fixed root URL.
+        // Keep iOS Safari's current-page install behavior when supported. The
+        // invite cookie is the authoritative handoff because Home Screen Web
+        // Apps have an isolated localStorage/IndexedDB container.
         start_url: "",
         scope: "./",
         display: "standalone",
