@@ -21,8 +21,8 @@ importers:
         specifier: ^19.2.0
         version: 19.3.0(react@19.3.0)
       trystero:
-        specifier: ^0.24.0
-        version: 0.24.0
+        specifier: ^0.25.4
+        version: 0.25.4
     devDependencies:
       '@types/react':
         specifier: ^19.2.2
@@ -956,11 +956,11 @@ packages:
     resolution: {integrity: sha512-/67zpWDBLV+oYAEL682s1ktXL0HgqX76f6gaVGkGnVZlBbm1zd0v4Bz8MFF2GGhoX9rvfq3KSQHubFHwa6w6/Q==}
     engines: {node: '>=12'}
 
-  '@trystero-p2p/core@0.24.0':
-    resolution: {integrity: sha512-W5ATiflgzZLE21fN2VA3YsK2yBJEzCvhmJ/9q2Vm3QT/gcdqDpcBxsO0DYCy/wE1PBEwoB+A75eBNtGIGAPdxw==}
+  '@trystero-p2p/core@0.25.4':
+    resolution: {integrity: sha512-ehvSL1FqW962XyEctXngeDF/IOM1bWmfCKBNR4vwmVa0JGfM0+dlY4TEzSEGghYp3qqGCrpFIVTxdvlBUGVO6Q==}
 
-  '@trystero-p2p/nostr@0.24.0':
-    resolution: {integrity: sha512-LmsJSicsFU/rhmOWYaP/OxFl3rwGieX+q0eh0pAWUQM7IXbMu6tLC5+aAimtHitikPv9r6sck6EUTWMin8dBAw==}
+  '@trystero-p2p/nostr@0.25.4':
+    resolution: {integrity: sha512-QDox1VVHl0ro/CLfQVUtMS9EQbtJhQM7CCsO4SGv9KrPBT+x3bmOqQ4Y6iugsLzQ6sW+a2cwUTxjDRz/BywqMg==}
 
   '@types/babel__core@7.20.5':
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
@@ -1954,8 +1954,8 @@ packages:
     resolution: {integrity: sha512-u8KszXvGfU68hVcZpRHKG28T0krMuv2G5nDhiHaMLen/gIuFEgIJhaJuO69qjnXg5paSrbPMFfx3brNuN8eVSg==}
     engines: {node: '>=14.0.0'}
 
-  trystero@0.24.0:
-    resolution: {integrity: sha512-IoY7kXNQg+jXQ7byjg69FNHbHaayUijnd3bNsLLumHQ7rk5p1r0Vu0JZA5JEoKYFAxGBS4shxE7MuNgsOntu+A==}
+  trystero@0.25.4:
+    resolution: {integrity: sha512-tFYn/fO1kBeSKLUxRPKHH2n5jIuz9zlPPF9SmCVrGBiPNDGtFZyHuQONMUwftnCclTWlVsLoTus5/6eHhVEg+Q==}
 
   type-fest@0.16.0:
     resolution: {integrity: sha512-eaBzG6MxNzEn9kiwvtre90cXaNLkmadMWa1zQMs3XORCXNbsH/OewwbxC5ia9dCxIxnTAsSxXJaa/p5y8DlvJg==}
@@ -3119,12 +3119,12 @@ snapshots:
       magic-string: 0.30.21
       string.prototype.matchall: 4.1.0
 
-  '@trystero-p2p/core@0.24.0': {}
+  '@trystero-p2p/core@0.25.4': {}
 
-  '@trystero-p2p/nostr@0.24.0':
+  '@trystero-p2p/nostr@0.25.4':
     dependencies:
       '@noble/secp256k1': 3.2.0
-      '@trystero-p2p/core': 0.24.0
+      '@trystero-p2p/core': 0.25.4
 
   '@types/babel__core@7.20.5':
     dependencies:
@@ -4256,9 +4256,9 @@ snapshots:
 
   tinyspy@4.0.6: {}
 
-  trystero@0.24.0:
+  trystero@0.25.4:
     dependencies:
-      '@trystero-p2p/nostr': 0.24.0
+      '@trystero-p2p/nostr': 0.25.4
 
   type-fest@0.16.0: {}
 
