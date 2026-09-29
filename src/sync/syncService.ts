@@ -83,6 +83,7 @@ export class SyncService {
   private pendingTimer?: number;
   private deliveryTimer?: number;
   private lastResumeRestartAt = 0;
+  private hiddenAt?: number;
   private restartPromise?: Promise<void>;
   private restarting = false;
   private stopped = false;
@@ -479,6 +480,8 @@ export class SyncService {
 
   async handleOnline(forceReconnect = false) {
     if (this.stopped || !navigator.onLine || !this.secret || !this.device) return;
+    const resumedFromBackground = this.hiddenAt !== undefined;
+    this.hiddenAt = undefined;
     if (this.restartPromise) {
       await this.restartPromise;
       if (this.room && this.hasUsablePeer()) {
@@ -494,7 +497,7 @@ export class SyncService {
       await this.start(this.secret, this.device);
       return;
     }
-    if (forceReconnect || !this.hasUsablePeer()) {
+    if (forceReconnect || resumedFromBackground || !this.hasUsablePeer()) {
       const now = Date.now();
       if (!forceReconnect && now - this.lastResumeRestartAt < minimumResumeRestartIntervalMs) {
         this.scheduleConnectionNotice();
@@ -510,9 +513,11 @@ export class SyncService {
   }
 
   handleHidden() {
-    // Keep the current room. iOS may suspend this page, but a short app
-    // switch can now resume the existing transport instead of always paying
-    // for a brand-new signaling and ICE handshake.
+    // Keep the current room and remember that its WebRTC state may become
+    // stale while iOS suspends the page. On the next visible event,
+    // handleOnline() performs one full room restart so a stale "connected"
+    // RTCPeerConnection cannot block rediscovery.
+    this.hiddenAt ??= Date.now();
   }
 
   handleOffline() {
@@ -525,6 +530,7 @@ export class SyncService {
     this.clearConnectionTimers();
     this.clearDeliveryTimer();
     this.clearSnapshotState();
+    this.hiddenAt = undefined;
     this.restarting = true;
     const room = this.room;
     this.room = undefined;
