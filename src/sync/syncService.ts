@@ -11,7 +11,7 @@ const pendingPairingCookieName = "project_one_pending_pairing_v1";
 const pendingPairingMaxAgeMs = 24 * 60 * 60 * 1000;
 const snapshotBatchSize = 50;
 const pendingConnectionNoticeMs = 3_000;
-const reconnectRetryDelaysMs = [2_500, 5_000, 5_000, 5_000] as const;
+const minimumResumeRestartIntervalMs = 3_000;
 
 export interface SyncViewState {
   status: SyncStatus;
@@ -81,9 +81,8 @@ export class SyncService {
   private device?: DeviceRecord;
   private secret?: string;
   private pendingTimer?: number;
-  private reconnectTimer?: number;
   private deliveryTimer?: number;
-  private reconnectAttempt = 0;
+  private lastResumeRestartAt = 0;
   private restartPromise?: Promise<void>;
   private restarting = false;
   private stopped = false;
@@ -105,9 +104,7 @@ export class SyncService {
 
   private clearConnectionTimers() {
     if (this.pendingTimer !== undefined) window.clearTimeout(this.pendingTimer);
-    if (this.reconnectTimer !== undefined) window.clearTimeout(this.reconnectTimer);
     this.pendingTimer = undefined;
-    this.reconnectTimer = undefined;
   }
 
   private clearDeliveryTimer() {
@@ -247,7 +244,7 @@ export class SyncService {
     }
   }
 
-  private scheduleConnectionRetry() {
+  private scheduleConnectionNotice() {
     if (this.stopped || this.restarting || this.restartPromise || !navigator.onLine || !this.room || !this.secret || !this.device) return;
     if (this.pendingTimer === undefined) {
       this.pendingTimer = window.setTimeout(() => {
@@ -255,14 +252,6 @@ export class SyncService {
         if (this.room && !this.hasUsablePeer()) this.setState({ status: navigator.onLine ? "pending" : "offline", peerCount: 0 });
       }, pendingConnectionNoticeMs);
     }
-    if (this.reconnectTimer !== undefined) return;
-    const delay = reconnectRetryDelaysMs[Math.min(this.reconnectAttempt, reconnectRetryDelaysMs.length - 1)] ?? reconnectRetryDelaysMs[0];
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = undefined;
-      if (!navigator.onLine || !this.room || this.hasUsablePeer() || !this.secret || !this.device) return;
-      this.reconnectAttempt += 1;
-      void this.restartRoom();
-    }, delay);
   }
 
   private restartRoom() {
@@ -289,7 +278,7 @@ export class SyncService {
         await this.start(secret, this.device);
       } catch {
         this.setState({ status: navigator.onLine ? "pending" : "offline", peerCount: 0 });
-        if (!this.stopped && navigator.onLine) this.scheduleConnectionRetry();
+        if (!this.stopped && navigator.onLine) this.scheduleConnectionNotice();
       } finally {
         this.restarting = false;
       }
@@ -322,7 +311,6 @@ export class SyncService {
         // which creates noisy retries before the phones can see each other.
         relayConfig: {
           urls: [
-            "wss://relay.damus.io",
             "wss://nos.lol",
             "wss://relay.nostrdice.com",
             "wss://nostr.sathoarder.com",
@@ -334,7 +322,7 @@ export class SyncService {
       {
         onJoinError: () => {
           this.setState({ status: navigator.onLine ? "error" : "offline" });
-          if (navigator.onLine) this.scheduleConnectionRetry();
+          if (navigator.onLine) this.scheduleConnectionNotice();
         },
       },
     );
@@ -357,7 +345,6 @@ export class SyncService {
 
     room.onPeerJoin = (peerId) => {
       this.clearConnectionTimers();
-      this.reconnectAttempt = 0;
       this.setState({ status: "connected", peerCount: Object.keys(room.getPeers()).length });
       void announcePeer(peerId);
     };
@@ -372,7 +359,10 @@ export class SyncService {
       if (deviceId && !Array.from(this.peerDevices.values()).includes(deviceId)) void this.repository.forgetPeer(deviceId);
       const peerCount = Object.keys(room.getPeers()).length;
       this.setState({ status: peerCount ? "connected" : navigator.onLine ? "pending" : "offline", peerCount });
-      if (!peerCount && navigator.onLine && !this.restarting) void this.restartRoom();
+      // Keep the incumbent room subscribed. The returning phone announces as a
+      // newcomer, which reconnects faster than making both phones repeatedly
+      // leave/rejoin and avoids public-relay rate limits.
+      if (!peerCount && navigator.onLine) this.scheduleConnectionNotice();
     };
 
     onHello((message: unknown, peerId: string) => {
@@ -441,7 +431,7 @@ export class SyncService {
     if (peers.length) {
       peers.forEach((peerId) => void announcePeer(peerId));
     } else {
-      this.scheduleConnectionRetry();
+      this.scheduleConnectionNotice();
     }
   }
 
@@ -497,12 +487,20 @@ export class SyncService {
         await this.requestFreshSnapshots();
         return;
       }
+      this.scheduleConnectionNotice();
+      return;
     }
     if (!this.room) {
       await this.start(this.secret, this.device);
       return;
     }
     if (forceReconnect || !this.hasUsablePeer()) {
+      const now = Date.now();
+      if (!forceReconnect && now - this.lastResumeRestartAt < minimumResumeRestartIntervalMs) {
+        this.scheduleConnectionNotice();
+        return;
+      }
+      this.lastResumeRestartAt = now;
       await this.restartRoom();
       return;
     }
