@@ -216,8 +216,14 @@ function useAppData() {
     const unsubscribeSync = syncService.subscribe((next) => active && setSync(next));
     const onOnline = () => void syncService.handleOnline();
     const onOffline = () => syncService.handleOffline();
-    const onVisible = () => document.visibilityState === "visible" ? void syncService.handleOnline() : syncService.handleHidden();
-    const onResume = () => void syncService.handleOnline();
+    const onResume = () => {
+      // Refresh local data immediately when the app returns from Home. The
+      // current tab lives only in this React instance, so this must not
+      // navigate or remount the app.
+      void refresh();
+      void syncService.handleOnline();
+    };
+    const onVisible = () => document.visibilityState === "visible" ? onResume() : syncService.handleHidden();
     const onHidden = () => syncService.handleHidden();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
