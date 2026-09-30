@@ -612,6 +612,7 @@ body { color: var(--ink); }
 .metric-value { color: #152820; font-size: 21px; font-weight: 800; letter-spacing: -.055em; overflow: hidden; }
 .metric-value-medium { font-size: 18px; }
 .metric-value-long { font-size: 13px; }
+.metric-value-customer { font-size: 16.8px; }
 .metric-period-compare { gap: 2px; }
 .metric-period-compare > span { color: #89938e; font-size: 8.1px; letter-spacing: -.04em; }
 .metric-period-compare strong { color: var(--green); font-size: 9px; letter-spacing: -.025em; }
@@ -631,7 +632,7 @@ body { color: var(--ink); }
 .today-page .quick-product { min-width: 0; min-height: 52px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(178px, 55.2%); align-items: center; gap: 7px; padding: 7px 8px 7px 10px; border: 0; border-radius: 17px; background: rgba(255,255,254,.98); box-shadow: 0 4px 15px rgba(26, 45, 37, .045); }
 .product-card-info { min-width: 0; display: grid; align-content: center; }
 .product-card-info h3 { min-width: 0; margin: 0; display: -webkit-box; color: #13251f; font-size: 17px; font-weight: 800; line-height: 1.08; letter-spacing: -.02em; overflow: hidden; overflow-wrap: anywhere; text-overflow: ellipsis; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.product-card-sold { min-width: 0; margin-top: 2px; overflow: hidden; color: #77857f; font-size: 9px; line-height: 1.12; text-overflow: ellipsis; white-space: nowrap; }
+.product-card-sold { min-width: 0; margin-top: 2px; overflow: hidden; color: #77857f; font-size: 9px; line-height: 1.12; text-overflow: ellipsis; white-space: nowrap; transform: translateY(5px); }
 .today-page .quick-actions { min-width: 0; height: 43px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; overflow: hidden; border-radius: 999px; background: var(--green-soft); }
 .today-page .quick-actions button { min-width: 0; min-height: 43px; height: 43px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 0 4px; border: 0; border-radius: 0; background: transparent; color: var(--green-dark); font-size: 14.4px; font-weight: 800; }
 .today-page .quick-actions button + button { border-left: 1px solid rgba(20, 119, 98, .10); }
@@ -660,6 +661,7 @@ body { color: var(--ink); }
   .metric-value { font-size: 19px; }
   .metric-value-medium { font-size: 16px; }
   .metric-value-long { font-size: 12px; letter-spacing: -.07em; }
+  .metric-value-customer { font-size: 15.2px; }
   .sales-metric-item strong { font-size: 10.4px; }
   .category-tabs button { padding-left: 12px; padding-right: 12px; }
   .category-toolbar .sort-toggle { padding-left: 9px; padding-right: 9px; }
