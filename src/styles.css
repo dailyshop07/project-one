@@ -619,10 +619,10 @@ body { color: var(--ink); }
 .metric-period-compare { gap: 2px; }
 .metric-period-compare > span { color: #89938e; font-size: 8.1px; letter-spacing: -.04em; }
 .metric-period-compare strong { color: var(--green); font-size: 9px; letter-spacing: -.025em; }
-.sales-metric-values { gap: 4px 1px; }
-.sales-metric-item { gap: 2px; }
-.sales-metric-item strong { color: var(--green-dark); font-size: 14px; letter-spacing: -.045em; }
-.sales-metric-item em { color: #687c74; font-size: 9px; }
+.sales-metric-values { width: 100%; height: 100%; grid-template-rows: repeat(2, minmax(0, 1fr)); align-items: center; justify-items: center; gap: 4px 1px; }
+.sales-metric-item { width: 100%; gap: 1.6px; justify-content: center; }
+.sales-metric-item strong { color: var(--green-dark); font-size: 11.2px; letter-spacing: -.045em; }
+.sales-metric-item em { color: #687c74; font-size: 7.2px; }
 
 .today-page .quick-card { margin-top: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .category-toolbar { gap: 7px; margin: 0 0 10px; }
@@ -667,7 +667,7 @@ body { color: var(--ink); }
   .metric-value { font-size: 19px; }
   .metric-value-medium { font-size: 16px; }
   .metric-value-long { font-size: 12px; letter-spacing: -.07em; }
-  .sales-metric-item strong { font-size: 13px; }
+  .sales-metric-item strong { font-size: 10.4px; }
   .category-tabs button { padding-left: 12px; padding-right: 12px; }
   .category-toolbar .sort-toggle { padding-left: 9px; padding-right: 9px; }
 .today-page .quick-product { grid-template-columns: minmax(0, 1fr) minmax(142px, 46%); gap: 6px; padding-left: 9px; }
