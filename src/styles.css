@@ -75,7 +75,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .sales-metric { text-align: center; }
 .sales-metric-values { min-width: 0; align-self: center; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 2px; transform: translateY(4px); }
 .sales-metric-item { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 2px; line-height: 1; }
-.sales-metric-item:nth-child(4) { transform: translateY(2px); }
+.sales-metric-item:nth-child(3), .sales-metric-item:nth-child(4) { transform: translateY(2px); }
 .sales-metric-item strong { color: var(--green-dark); font-size: clamp(11px, 3.6vw, 18px); letter-spacing: -.055em; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sales-metric-item-long strong { font-size: clamp(8px, 2.4vw, 15px); letter-spacing: -.08em; }
 .sales-metric-item em { color: #698078; font-size: clamp(8px, 2.5vw, 11px); font-style: normal; font-weight: 750; white-space: nowrap; }
