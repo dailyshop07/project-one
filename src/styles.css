@@ -637,10 +637,10 @@ body { color: var(--ink); }
 .product-card-info { min-width: 0; display: grid; align-content: center; }
 .product-card-info h3 { min-width: 0; margin: 0; display: -webkit-box; color: #13251f; font-size: 17px; font-weight: 800; line-height: 1.08; letter-spacing: -.02em; overflow: hidden; overflow-wrap: anywhere; text-overflow: ellipsis; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .product-card-sold { min-width: 0; margin-top: 2px; overflow: hidden; color: #77857f; font-size: 9px; line-height: 1.12; text-overflow: ellipsis; white-space: nowrap; transform: translateY(5px); }
-.today-page .quick-actions { min-width: 0; height: 43px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; overflow: hidden; border-radius: 999px; background: var(--green-soft); }
+.today-page .quick-actions { width: 110%; min-width: 0; height: 43px; justify-self: end; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; overflow: hidden; border-radius: 999px; background: var(--green-soft); }
 .today-page .quick-actions button { min-width: 0; min-height: 43px; height: 43px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 0 4px; border: 0; border-radius: 0; background: transparent; color: var(--green-dark); font-size: 14.4px; font-weight: 800; }
 .today-page .quick-actions button + button { border-left: 1px solid rgba(20, 119, 98, .10); }
-.today-page .quick-actions.single { width: 50%; justify-self: end; grid-template-columns: minmax(0, 1fr); }
+.today-page .quick-actions.single { width: 55%; grid-template-columns: minmax(0, 1fr); }
 .today-page .quick-actions.single button { border-radius: 999px; }
 .today-page .quick-add-label { min-width: 0; overflow: hidden; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
 .today-page .quick-actions button small { color: #6a7e76; font-size: 10.8px; font-weight: 600; line-height: 1; }
