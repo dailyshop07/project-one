@@ -17,10 +17,15 @@ export default defineConfig({
         short_name: "Daily Shop",
         description: "A private, local-first daily operations app.",
         lang: "zh-CN",
-        // Keep iOS Safari's current-page install behavior when supported. The
-        // invite cookie is the authoritative handoff because Home Screen Web
-        // Apps have an isolated localStorage/IndexedDB container.
-        start_url: "",
+        // Do not force the Home Screen app back to the repository root. When
+        // installed from an invitation URL, iOS can use the current page as
+        // the launch URL and carry the one-time `?pair=...` handoff into the
+        // standalone app. Safari and the Home Screen app have separate
+        // IndexedDB/localStorage containers, so losing this URL loses the
+        // pairing identity.
+        // Vite PWA's default is `./`; omit the member in the generated
+        // manifest so Safari can fall back to the invitation page URL.
+        start_url: undefined as unknown as string,
         scope: "./",
         display: "standalone",
         orientation: "portrait-primary",

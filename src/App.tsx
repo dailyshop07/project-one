@@ -183,10 +183,25 @@ const buildHourlyCustomerRows = (sales: Sale[], asOf: Date): HourlyCustomerRow[]
   });
 };
 
-const quickAddCostCents = (product: Product, unitType: UnitType, costStates: ReturnType<typeof inventoryCostStates>) => {
+const averageUnitCostCents = (product: Product, unitType: UnitType, costStates: ReturnType<typeof inventoryCostStates>) => {
   const baseCost = averageCostCentsForProduct(product, costStates);
   if (product.categoryKind === "tobacco") return baseCost * Math.max(1, product.unitWeightGrams ?? 1);
   return unitType === "carton" ? baseCost * Math.max(1, product.packsPerCarton) : baseCost;
+};
+
+const formatProductAverageCost = (product: Product, costStates: ReturnType<typeof inventoryCostStates>, currency: string) => {
+  const unitType = productHasBundle(product) ? "carton" : "pack";
+  const unitLabel = product.categoryKind === "tobacco" ? "公斤" : productHasBundle(product) ? productBundleUnitLabel(product) : productBaseUnitLabel(product);
+  const cost = product.categoryKind === "tobacco" ? displayCostCentsAtAverage(product, costStates) : averageUnitCostCents(product, unitType, costStates);
+  return `${formatMoney(cost, currency)} / ${unitLabel}`;
+};
+
+const formatProductSoldQuantity = (product: Product, quantities: Record<UnitType, number>) => {
+  const parts = [
+    productHasBundle(product) && quantities.carton > 0 ? `${quantities.carton}${productBundleUnitLabel(product)}` : "",
+    quantities.pack > 0 ? `${quantities.pack}${productBaseUnitLabel(product)}` : "",
+  ].filter(Boolean);
+  return parts.length ? `已售 ${parts.join(" ")}` : "已售 0";
 };
 
 function useAppData() {
@@ -341,7 +356,6 @@ export function App() {
           onAdd={(id, unit) => void mutate(() => repository.addToCart(id, unit))}
           onMove={(id, direction) => void mutate(() => repository.moveProduct(id, direction))}
           onAddProduct={() => { setTab("products"); setProductEditor("new"); }}
-          onSale={setSaleDetail}
           />
         )}
         {tab === "history" && <HistoryPage data={data} currency={currency} onSale={setSaleDetail} />}
@@ -425,7 +439,7 @@ export function App() {
   );
 }
 
-function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProduct, onSale }: {
+function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProduct }: {
   data: AppSnapshot;
   sync: SyncViewState;
   currency: string;
@@ -433,7 +447,6 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
   onAdd: (id: string, unit: UnitType) => void;
   onMove: (id: string, direction: "up" | "down") => void;
   onAddProduct: () => void;
-  onSale: (sale: Sale) => void;
 }) {
   const [categoryId, setCategoryId] = useState<string>("all");
   const [sorting, setSorting] = useState(false);
@@ -460,15 +473,15 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
   });
   const metrics = summarizeSales(sales, data.saleItems, data.products);
   const yesterdayMetrics = summarizeSales(yesterdaySales, data.saleItems, data.products);
-  const unitTotals = Object.entries(metrics.unitTotals).sort(([left], [right]) => {
-    const order = ["条", "包"];
-    const leftIndex = order.indexOf(left);
-    const rightIndex = order.indexOf(right);
-    if (leftIndex !== -1 || rightIndex !== -1) return (leftIndex === -1 ? order.length : leftIndex) - (rightIndex === -1 ? order.length : rightIndex);
-    return 0;
-  });
+  const salesMetricValues = ["条", "包", "支", "克"].map((label) => [label, metrics.unitTotals[label] ?? 0] as [string, number]);
   const todaySaleIds = new Set(sales.map((sale) => sale.id));
   const todayItems = data.saleItems.filter((item) => todaySaleIds.has(item.saleId));
+  const todayProductQuantities = new Map<string, Record<UnitType, number>>();
+  todayItems.forEach((item) => {
+    const quantities = todayProductQuantities.get(item.productId) ?? { pack: 0, carton: 0 };
+    quantities[item.unitType] += item.quantity;
+    todayProductQuantities.set(item.productId, quantities);
+  });
   const breakdownRows = breakdownRequest ? buildBreakdownRows(todayItems, data.products, breakdownRequest) : [];
   const breakdownTotal = breakdownRequest?.metric === "quantity"
     ? metrics.unitTotals[breakdownRequest.unitLabel ?? ""] ?? 0
@@ -501,17 +514,11 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
         </div>
       </header>
 
-      <div className="sales-summary-panel" aria-label="销量">
-        <div className="sales-summary-heading"><button type="button" className="sales-summary-heading-button" onClick={() => setSalesHistoryOpen(true)} aria-label="查看销量历史">销量</button></div>
-        <div className="sales-summary-values">
-          {unitTotals.length ? unitTotals.map(([label, quantity]) => <button type="button" className="sales-summary-item sales-summary-button" key={label} onClick={() => setBreakdownRequest({ metric: "quantity", unitLabel: label })} aria-label={`查看${label}销量贡献`}><strong>{quantity}</strong><em>{label}</em></button>) : <span className="sales-summary-zero">0</span>}
-        </div>
-      </div>
-
       <section className="metric-grid" aria-label="今日数据">
-        <Metric label="销售额" value={formatMoney(metrics.revenue, currency)} comparison={compareMetric(metrics.revenue, yesterdayMetrics.revenue)} onClick={() => setBreakdownRequest({ metric: "revenue" })} />
-        <Metric label="毛利" value={formatMoney(metrics.profit, currency)} comparison={compareMetric(metrics.profit, yesterdayMetrics.profit)} onClick={() => setBreakdownRequest({ metric: "profit" })} />
-        <Metric label="客户数" value={String(metrics.customers)} comparison={compareMetric(metrics.customers, yesterdayMetrics.customers)} onClick={() => setCustomerHoursOpen(true)} />
+        <Metric icon="revenue" label="销售额" value={formatMoney(metrics.revenue, currency)} comparison={compareMetric(metrics.revenue, yesterdayMetrics.revenue)} onClick={() => setBreakdownRequest({ metric: "revenue" })} />
+        <Metric icon="profit" label="毛利" value={formatMoney(metrics.profit, currency)} comparison={compareMetric(metrics.profit, yesterdayMetrics.profit)} onClick={() => setBreakdownRequest({ metric: "profit" })} />
+        <Metric icon="customers" label="客户数" value={String(metrics.customers)} comparison={compareMetric(metrics.customers, yesterdayMetrics.customers)} onClick={() => setCustomerHoursOpen(true)} />
+        <SalesMetric values={salesMetricValues} onClick={() => setSalesHistoryOpen(true)} />
       </section>
 
       <section className="card quick-card">
@@ -534,7 +541,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                 <article className="quick-product" key={product.id}>
                   <div className="product-card-head">
                     <h3>{product.name}</h3>
-                    <div>{productHasBundle(product) ? <><span>{productBaseUnitLabel(product)} {formatMoney(product.packSalePriceCents, currency)}</span><span>{productBundleUnitLabel(product)} {formatMoney(product.cartonSalePriceCents, currency)}</span></> : <span>{productBaseUnitLabel(product)} {formatMoney(product.packSalePriceCents, currency)}</span>}</div>
+                    <div><span>{formatProductSoldQuantity(product, todayProductQuantities.get(product.id) ?? { pack: 0, carton: 0 })}</span></div>
                   </div>
                   {sorting ? (
                     <div className="sort-actions">
@@ -542,10 +549,13 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                       <button disabled={products.findIndex((item) => item.id === product.id) === products.length - 1} onClick={() => onMove(product.id, "down")}>↓ 下移</button>
                     </div>
                   ) : (
-                    <div className="quick-actions">
-                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} costCents={quickAddCostCents(product, "carton", costStates)} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
-                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} costCents={quickAddCostCents(product, "pack", costStates)} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
-                    </div>
+                    <>
+                      <div className="quick-product-cost"><span>当前平均成本</span> <strong>{formatProductAverageCost(product, costStates, currency)}</strong></div>
+                      <div className="quick-actions">
+                        {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
+                        <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
+                      </div>
+                    </>
                   )}
                 </article>
               );
@@ -556,12 +566,6 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
         )}
       </section>
 
-      <section className="card recent-card">
-        <div className="section-title-row stacked-title"><div><h2>最近交易</h2><strong>今天 {sales.length} 笔</strong></div></div>
-        {sales.length ? sales.map((sale) => (
-          <SaleRow key={sale.id} sale={sale} items={data.saleItems.filter((item) => item.saleId === sale.id)} currency={currency} onClick={() => onSale(sale)} />
-        )) : <p className="empty-inline">今天还没有完成的交易。</p>}
-      </section>
       {salesHistoryOpen && <DailySalesHistorySheet data={data} onClose={() => setSalesHistoryOpen(false)} />}
       {breakdownRequest && <BreakdownSheet request={breakdownRequest} rows={breakdownRows} total={breakdownTotal} currency={currency} onClose={() => setBreakdownRequest(null)} />}
       {customerHoursOpen && <CustomerHoursSheet sales={sales} asOf={today} onClose={() => setCustomerHoursOpen(false)} />}
@@ -928,17 +932,41 @@ function PageHeader({ title, subtitle, action }: { title: string; subtitle: stri
   return <header className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</header>;
 }
 
-function Metric({ label, value, comparison, onClick }: { label: string; value: string; comparison?: MetricComparison; onClick?: () => void }) {
+type MetricIconKind = "revenue" | "profit" | "customers" | "sales";
+
+function MetricIcon({ kind }: { kind: MetricIconKind }) {
+  const paths: Record<MetricIconKind, ReactNode> = {
+    revenue: <><path d="M5 18V11" /><path d="M12 18V7" /><path d="M19 18V3" /><path d="M4 21h17" /></>,
+    profit: <><ellipse cx="8" cy="15" rx="4.5" ry="2.3" /><path d="M3.5 15v3c0 1.3 2 2.3 4.5 2.3s4.5-1 4.5-2.3v-3" /><ellipse cx="16" cy="8" rx="4.5" ry="2.3" /><path d="M11.5 8v3c0 1.3 2 2.3 4.5 2.3s4.5-1 4.5-2.3V8" /></>,
+    customers: <><circle cx="9" cy="9" r="3" /><circle cx="17" cy="10" r="2.5" /><path d="M3.5 20c.4-3.1 2.2-4.7 5.5-4.7s5.1 1.6 5.5 4.7" /><path d="M14.5 15.7c2.8-.2 4.5 1.2 5 3.8" /></>,
+    sales: <><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" /><path d="m4.5 7.5 7.5 4.2 7.5-4.2" /><path d="M12 11.7V21" /></>,
+  };
+  return <span className="metric-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{paths[kind]}</svg></span>;
+}
+
+function Metric({ icon, label, value, comparison, onClick }: { icon?: Exclude<MetricIconKind, "sales">; label: string; value: string; comparison?: MetricComparison; onClick?: () => void }) {
+  const valueLengthClass = value.length >= 9 ? " metric-value-long" : value.length >= 7 ? " metric-value-medium" : "";
   const content = (
     <>
       <div className="metric-head">
+        {icon && <MetricIcon kind={icon} />}
         <span>{label}</span>
       </div>
-      <strong className={`metric-value${value.length > 16 ? " metric-value-compact metric-value-extra-compact" : value.length > 10 ? " metric-value-compact" : ""}`}>{value}</strong>
-      {comparison && <div className={`metric-period-compare ${comparison.tone}`}><span>以昨日同期相比</span><strong>{comparison.value} {comparison.arrow}</strong></div>}
+      <strong className={`metric-value${valueLengthClass}`} aria-label={value}>{value}</strong>
+      {comparison && <div className={`metric-period-compare ${comparison.tone}`}><span>较昨日同期</span><strong>{comparison.arrow} {comparison.value.replace(/^[+-]/, "")}</strong></div>}
     </>
   );
   return onClick ? <button type="button" className="metric metric-button" onClick={onClick}>{content}</button> : <div className="metric">{content}</div>;
+}
+
+function SalesMetric({ values, onClick }: { values: [string, number][]; onClick: () => void }) {
+  return <button type="button" className="metric metric-button sales-metric" onClick={onClick} aria-label="查看销量历史">
+    <div className="metric-head"><MetricIcon kind="sales" /><span>销量</span></div>
+    <div className="sales-metric-values">{values.map(([label, quantity]) => {
+      const formattedQuantity = quantity.toLocaleString("zh-CN");
+      return <span className={`sales-metric-item${formattedQuantity.length > 3 ? " sales-metric-item-long" : ""}`} key={label}><strong>{formattedQuantity}</strong><em>{label}</em></span>;
+    })}</div>
+  </button>;
 }
 
 function SyncBadge({ state, pending }: { state: SyncViewState; pending: number }) {
@@ -950,9 +978,9 @@ function SaleRow({ sale, items, currency, onClick }: { sale: Sale; items: SaleIt
   return <button className="sale-row" onClick={onClick}><time>{formatTime(sale.completedAt)}</time><div><strong>{saleSummary(items) || "交易记录"}</strong><span>毛利 {formatMoney(sale.profitCents, currency)} · 销售：{sale.deviceLabelSnapshot ?? "本机"}</span></div><b>{formatMoney(sale.revenueCents, currency)}</b></button>;
 }
 
-function QuickAddButton({ label, costCents, currency, ariaLabel, count, onAdd }: { label: string; costCents: number; currency: string; ariaLabel: string; count: number; onAdd: () => void }) {
+function QuickAddButton({ label, priceCents, currency, ariaLabel, count, onAdd }: { label: string; priceCents: number; currency: string; ariaLabel: string; count: number; onAdd: () => void }) {
   const badge = count > 0 ? <span className="quick-add-badge" aria-hidden="true">{count}</span> : null;
-  return <button type="button" onClick={onAdd} aria-label={`${ariaLabel}，成本 ${formatMoney(costCents, currency)}`}><span className="quick-add-label">{label}</span><small>成本 {formatMoney(costCents, currency)}</small>{badge}</button>;
+  return <button type="button" onClick={onAdd} aria-label={`${ariaLabel}，零售价 ${formatMoney(priceCents, currency)}`}><span className="quick-add-label">{label}</span><small>{formatMoney(priceCents, currency)}</small>{badge}</button>;
 }
 
 function EmptyState({ title, body, action, onAction }: { title: string; body: string; action?: string; onAction?: () => void }) {

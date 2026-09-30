@@ -3,6 +3,7 @@ import type { DeviceRecord, SyncOperation } from "../types";
 import type { Repository } from "../db/repository";
 import { randomId, roomIdFromSecret, validPairingSecret } from "../db/identity";
 import { fetchTurnIceServers } from "./turnCredentials";
+import { KeepPristineOfferPeerConnection } from "./rtcPolyfill";
 
 export type SyncStatus = "local" | "offline" | "connecting" | "connected" | "syncing" | "pending" | "error";
 
@@ -11,7 +12,8 @@ const pendingPairingCookieName = "project_one_pending_pairing_v1";
 const pendingPairingMaxAgeMs = 24 * 60 * 60 * 1000;
 const snapshotBatchSize = 50;
 const pendingConnectionNoticeMs = 3_000;
-const reconnectRetryDelaysMs = [2_500, 5_000, 5_000, 5_000] as const;
+const minimumResumeRestartIntervalMs = 3_000;
+const connectionRetryIntervalMs = 1_000;
 
 export interface SyncViewState {
   status: SyncStatus;
@@ -81,9 +83,11 @@ export class SyncService {
   private device?: DeviceRecord;
   private secret?: string;
   private pendingTimer?: number;
-  private reconnectTimer?: number;
   private deliveryTimer?: number;
-  private reconnectAttempt = 0;
+  private reconnectTimer?: number;
+  private reconnectAttemptInFlight = false;
+  private lastResumeRestartAt = 0;
+  private hiddenAt?: number;
   private restartPromise?: Promise<void>;
   private restarting = false;
   private stopped = false;
@@ -105,9 +109,48 @@ export class SyncService {
 
   private clearConnectionTimers() {
     if (this.pendingTimer !== undefined) window.clearTimeout(this.pendingTimer);
-    if (this.reconnectTimer !== undefined) window.clearTimeout(this.reconnectTimer);
     this.pendingTimer = undefined;
+  }
+
+  private stopConnectionRetry() {
+    if (this.reconnectTimer !== undefined) window.clearInterval(this.reconnectTimer);
     this.reconnectTimer = undefined;
+  }
+
+  private startConnectionRetry() {
+    if (this.stopped || !navigator.onLine || !this.secret || !this.device || this.restarting || this.restartPromise) return;
+    if (this.reconnectTimer !== undefined) return;
+    this.reconnectTimer = window.setInterval(() => void this.retryConnection(), connectionRetryIntervalMs);
+  }
+
+  private async retryConnection() {
+    if (this.stopped || !navigator.onLine || !this.secret || !this.device) {
+      this.stopConnectionRetry();
+      return;
+    }
+    if (this.hasUsablePeer()) {
+      this.stopConnectionRetry();
+      this.clearConnectionTimers();
+      this.setState({ status: "connected", peerCount: Object.keys(this.room?.getPeers() ?? {}).length });
+      await this.requestFreshSnapshots();
+      return;
+    }
+    if (this.reconnectAttemptInFlight || this.restarting || this.restartPromise) return;
+
+    this.reconnectAttemptInFlight = true;
+    try {
+      if (!this.room) {
+        await this.start(this.secret, this.device);
+        return;
+      }
+      // Keep the room and its relay subscriptions alive. Trystero already
+      // runs a startup/steady announcement schedule; repeatedly leaving and
+      // rejoining here can leave the other phone with a stale shared-peer
+      // binding and make both sides wait forever.
+      this.setState({ status: "connecting", peerCount: 0 });
+    } finally {
+      this.reconnectAttemptInFlight = false;
+    }
   }
 
   private clearDeliveryTimer() {
@@ -247,22 +290,15 @@ export class SyncService {
     }
   }
 
-  private scheduleConnectionRetry() {
-    if (this.stopped || this.restarting || this.restartPromise || !navigator.onLine || !this.room || !this.secret || !this.device) return;
-    if (this.pendingTimer === undefined) {
+  private scheduleConnectionNotice() {
+    if (this.stopped || !navigator.onLine || !this.secret || !this.device) return;
+    this.startConnectionRetry();
+    if (this.room && this.pendingTimer === undefined) {
       this.pendingTimer = window.setTimeout(() => {
         this.pendingTimer = undefined;
         if (this.room && !this.hasUsablePeer()) this.setState({ status: navigator.onLine ? "pending" : "offline", peerCount: 0 });
       }, pendingConnectionNoticeMs);
     }
-    if (this.reconnectTimer !== undefined) return;
-    const delay = reconnectRetryDelaysMs[Math.min(this.reconnectAttempt, reconnectRetryDelaysMs.length - 1)] ?? reconnectRetryDelaysMs[0];
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = undefined;
-      if (!navigator.onLine || !this.room || this.hasUsablePeer() || !this.secret || !this.device) return;
-      this.reconnectAttempt += 1;
-      void this.restartRoom();
-    }, delay);
   }
 
   private restartRoom() {
@@ -289,9 +325,10 @@ export class SyncService {
         await this.start(secret, this.device);
       } catch {
         this.setState({ status: navigator.onLine ? "pending" : "offline", peerCount: 0 });
-        if (!this.stopped && navigator.onLine) this.scheduleConnectionRetry();
+        if (!this.stopped && navigator.onLine) this.scheduleConnectionNotice();
       } finally {
         this.restarting = false;
+        if (!this.stopped && navigator.onLine && !this.hasUsablePeer()) this.startConnectionRetry();
       }
     })();
     this.restartPromise = restart;
@@ -322,19 +359,21 @@ export class SyncService {
         // which creates noisy retries before the phones can see each other.
         relayConfig: {
           urls: [
-            "wss://relay.damus.io",
             "wss://nos.lol",
             "wss://relay.nostrdice.com",
             "wss://nostr.sathoarder.com",
             "wss://nostr.tegila.com.br",
+            "wss://relay.agorist.space",
+            "wss://nostr.vulpem.com",
           ],
         },
+        rtcPolyfill: KeepPristineOfferPeerConnection,
       },
       roomId,
       {
         onJoinError: () => {
           this.setState({ status: navigator.onLine ? "error" : "offline" });
-          if (navigator.onLine) this.scheduleConnectionRetry();
+          if (navigator.onLine) this.scheduleConnectionNotice();
         },
       },
     );
@@ -357,7 +396,7 @@ export class SyncService {
 
     room.onPeerJoin = (peerId) => {
       this.clearConnectionTimers();
-      this.reconnectAttempt = 0;
+      this.stopConnectionRetry();
       this.setState({ status: "connected", peerCount: Object.keys(room.getPeers()).length });
       void announcePeer(peerId);
     };
@@ -372,7 +411,10 @@ export class SyncService {
       if (deviceId && !Array.from(this.peerDevices.values()).includes(deviceId)) void this.repository.forgetPeer(deviceId);
       const peerCount = Object.keys(room.getPeers()).length;
       this.setState({ status: peerCount ? "connected" : navigator.onLine ? "pending" : "offline", peerCount });
-      if (!peerCount && navigator.onLine && !this.restarting) void this.restartRoom();
+      // Keep the incumbent room subscribed. The returning phone announces as a
+      // newcomer, which reconnects faster than making both phones repeatedly
+      // leave/rejoin and avoids public-relay rate limits.
+      if (!peerCount && navigator.onLine) this.scheduleConnectionNotice();
     };
 
     onHello((message: unknown, peerId: string) => {
@@ -439,9 +481,10 @@ export class SyncService {
     const peers = Object.keys(room.getPeers());
     this.setState({ status: peers.length ? "connected" : "connecting", peerCount: peers.length });
     if (peers.length) {
+      this.stopConnectionRetry();
       peers.forEach((peerId) => void announcePeer(peerId));
     } else {
-      this.scheduleConnectionRetry();
+      this.scheduleConnectionNotice();
     }
   }
 
@@ -489,6 +532,8 @@ export class SyncService {
 
   async handleOnline(forceReconnect = false) {
     if (this.stopped || !navigator.onLine || !this.secret || !this.device) return;
+    const resumedFromBackground = this.hiddenAt !== undefined;
+    this.hiddenAt = undefined;
     if (this.restartPromise) {
       await this.restartPromise;
       if (this.room && this.hasUsablePeer()) {
@@ -497,36 +542,50 @@ export class SyncService {
         await this.requestFreshSnapshots();
         return;
       }
+      this.scheduleConnectionNotice();
+      return;
     }
     if (!this.room) {
       await this.start(this.secret, this.device);
       return;
     }
-    if (forceReconnect || !this.hasUsablePeer()) {
+    if (forceReconnect || resumedFromBackground || !this.hasUsablePeer()) {
+      const now = Date.now();
+      if (!forceReconnect && now - this.lastResumeRestartAt < minimumResumeRestartIntervalMs) {
+        this.scheduleConnectionNotice();
+        return;
+      }
+      this.lastResumeRestartAt = now;
       await this.restartRoom();
       return;
     }
     this.clearConnectionTimers();
+    this.stopConnectionRetry();
     this.setState({ status: "connected", peerCount: Object.keys(this.room.getPeers()).length });
     await this.requestFreshSnapshots();
   }
 
   handleHidden() {
-    // Keep the current room. iOS may suspend this page, but a short app
-    // switch can now resume the existing transport instead of always paying
-    // for a brand-new signaling and ICE handshake.
+    // Keep the current room and remember that its WebRTC state may become
+    // stale while iOS suspends the page. On the next visible event,
+    // handleOnline() performs one full room restart so a stale "connected"
+    // RTCPeerConnection cannot block rediscovery.
+    this.hiddenAt ??= Date.now();
   }
 
   handleOffline() {
     this.clearConnectionTimers();
+    this.stopConnectionRetry();
     this.setState({ status: "offline", peerCount: 0 });
   }
 
   stop() {
     this.stopped = true;
     this.clearConnectionTimers();
+    this.stopConnectionRetry();
     this.clearDeliveryTimer();
     this.clearSnapshotState();
+    this.hiddenAt = undefined;
     this.restarting = true;
     const room = this.room;
     this.room = undefined;
@@ -574,9 +633,9 @@ export function pendingPairingSecretFromStorage() {
 function rememberPairingCookie(secret: string) {
   try {
     const secure = location.protocol === "https:" ? "; Secure" : "";
-    // iOS copies first-party cookies when creating a Home Screen Web App.
-    // This is the browser-supported bridge for Safari's isolated
-    // localStorage/IndexedDB containers.
+    // This is a fallback bridge for iOS versions that copy first-party
+    // cookies when creating a Home Screen Web App. The invitation launch URL
+    // is the primary handoff because Safari and standalone storage are isolated.
     document.cookie = `${pendingPairingCookieName}=${encodeURIComponent(secret)}; Max-Age=${Math.floor(pendingPairingMaxAgeMs / 1000)}; Path=/; SameSite=Lax${secure}`;
   } catch {
     // Safari private browsing may deny cookies; the URL/manual reconnect is the fallback.

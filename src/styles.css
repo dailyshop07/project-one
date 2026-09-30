@@ -55,43 +55,51 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .more-button { isolation: isolate; }
 .more-button span { position: relative; z-index: 1; }
 
-.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 1px 0 10px; }
-.metric { min-width: 0; min-height: 108px; padding: 13px 13px 12px; display: flex; flex-direction: column; background: var(--card); border: 1px solid rgba(224,225,219,.75); border-radius: 16px; box-shadow: 0 5px 18px rgba(30,45,38,.035); }
-.metric-head { min-width: 0; min-height: 24px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.metric span { display: block; min-width: 0; color: #687771; font-size: 13px; font-weight: 650; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.metric-value { display: block; margin-top: auto; padding-top: 9px; color: #172c25; font-size: clamp(19px, 4.4vw, 25px); font-weight: 800; line-height: 1.05; letter-spacing: -.035em; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.metric-value-compact { font-size: clamp(11px, 3vw, 16px); letter-spacing: -.04em; }
-.metric-value-extra-compact { font-size: clamp(10px, 2.5vw, 14px); letter-spacing: -.045em; }
-.metric-period-compare { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 7px; line-height: 1; white-space: nowrap; }
-.metric-period-compare span { color: var(--muted); font-size: 9px; font-weight: 600; letter-spacing: 0; overflow: visible; }
-.metric-period-compare strong { font-size: 11px; letter-spacing: 0; }
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: clamp(3px, 1vw, 7px); margin: 1px 0 10px; }
+.metric { min-width: 0; width: 100%; height: 112px; padding: 9px 4px 8px; display: grid; grid-template-rows: 32px minmax(0, 1fr) 21px; align-items: stretch; background: var(--card); border: 1px solid rgba(224,225,219,.75); border-radius: 18px; box-shadow: 0 5px 18px rgba(30,45,38,.035); container-type: inline-size; }
+.metric-head { min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 5px; text-align: center; }
+.metric-head > span:not(.metric-icon) { display: block; min-width: 0; color: #687771; font-size: clamp(11px, 3vw, 16px); font-weight: 650; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: clip; }
+.metric-icon { width: 29px; height: 29px; flex: 0 0 29px; display: grid; place-items: center; border-radius: 50%; background: #e8f3ee; color: var(--green); }
+.metric-icon svg { width: 17px; height: 17px; display: block; }
+.metric-value { display: block; align-self: center; width: 100%; min-width: 0; color: #172c25; font-size: clamp(17px, 5.4vw, 27px); font-weight: 800; line-height: 1; letter-spacing: -.045em; text-align: center; white-space: nowrap; overflow: visible; text-overflow: clip; font-variant-numeric: tabular-nums lining-nums; font-feature-settings: "tnum" 1, "lnum" 1; }
+.metric-value-medium { font-size: clamp(12px, 4.8vw, 24px); letter-spacing: -.06em; }
+.metric-value-long { font-size: clamp(10px, 3.3vw, 18px); letter-spacing: -.08em; transform: scaleX(.95); transform-origin: center; }
+.metric-period-compare { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 2px; margin: 0; line-height: 1; white-space: nowrap; }
+.metric-period-compare > span { display: block; min-width: 0; color: var(--muted); font-size: clamp(6.5px, 1.9vw, 11px); font-weight: 600; letter-spacing: -.06em; white-space: nowrap; overflow: visible; text-overflow: clip; }
+.metric-period-compare strong { flex: 0 0 auto; color: var(--green); font-size: clamp(8px, 2.5vw, 14px); letter-spacing: -.045em; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .metric-period-compare.up strong { color: var(--green); }
 .metric-period-compare.down strong { color: var(--danger); }
 .metric-period-compare.same strong { color: var(--muted); }
 .metric-button { width: 100%; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .metric-button:active, .metric-button:focus-visible { border-color: var(--green); outline: 0; box-shadow: 0 0 0 3px rgba(25,116,91,.12); }
-
-@media (max-width: 390px) {
-  .metric { min-height: 103px; padding: 10px 8px 10px; }
-  .metric-head { gap: 3px; }
-  .metric span { font-size: 11px; }
-  .metric-period-compare { gap: 3px; margin-top: 6px; }
-  .metric-period-compare span { font-size: 8px; }
-  .metric-period-compare strong { font-size: 9px; }
-  .metric-value { padding-top: 9px; font-size: clamp(17px, 5.2vw, 21px); }
-}
+.sales-metric { text-align: center; }
+.sales-metric-values { min-width: 0; align-self: center; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 2px; }
+.sales-metric-item { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 2px; line-height: 1; }
+.sales-metric-item strong { color: var(--green-dark); font-size: clamp(11px, 3.6vw, 18px); letter-spacing: -.055em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sales-metric-item-long strong { font-size: clamp(8px, 2.4vw, 15px); letter-spacing: -.08em; }
+.sales-metric-item em { color: #698078; font-size: clamp(8px, 2.5vw, 11px); font-style: normal; font-weight: 750; white-space: nowrap; }
 
 @media (max-width: 430px) {
-  .metric { padding-left: 7px; padding-right: 7px; }
+  .metric { height: 108px; grid-template-rows: 28px minmax(0, 1fr) 18px; padding-top: 8px; padding-bottom: 7px; }
   .metric-head { gap: 3px; }
-  .metric span { font-size: 11px; }
-  .metric-period-compare { gap: 2px; }
-  .metric-period-compare span { font-size: 7px; }
+  .metric-icon { width: 24px; height: 24px; flex-basis: 24px; }
+  .metric-icon svg { width: 15px; height: 15px; }
+  .sales-metric-values { gap: 5px 1px; }
+  .metric-period-compare > span { font-size: 7px; }
+  .metric-period-compare strong { font-size: 9px; }
+}
+
+@media (max-width: 350px) {
+  .metric { height: 104px; grid-template-rows: 26px minmax(0, 1fr) 18px; padding-left: 3px; padding-right: 3px; }
+  .metric-icon { display: none; }
+  .metric-head > span:not(.metric-icon) { font-size: 10.5px; }
+  .metric-period-compare { gap: 1px; }
+  .metric-period-compare > span { font-size: 6px; letter-spacing: -.08em; }
   .metric-period-compare strong { font-size: 8px; }
 }
 
 .card { background: var(--card); border: 1px solid rgba(224,225,219,.72); border-radius: 20px; box-shadow: 0 7px 24px rgba(35,48,42,.045); }
-.quick-card, .recent-card, .list-card, .chart-card, .ranking-card { padding: 14px 10px 10px; margin-top: 12px; }
+.quick-card, .list-card, .chart-card, .ranking-card { padding: 14px 10px 10px; margin-top: 12px; }
 .quick-card { margin-top: 9px; }
 .section-title-row { display: flex; justify-content: space-between; align-items: center; min-height: 30px; padding: 0 2px; }
 .section-title-row h2, .chart-card h2 { margin: 0; color: var(--green); font-size: 14px; letter-spacing: .02em; }
@@ -157,6 +165,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .product-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; min-height: 42px; }
 .product-card-head h3 { margin: 0; font-size: 16px; line-height: 1.18; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .product-card-head > div { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; color: #77847d; font-size: 10px; line-height: 1.55; white-space: nowrap; }
+.quick-product-cost { min-height: 0; margin: 3px 0 7px; color: #77847d; font-size: 10px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.quick-product-cost span { color: #77847d; }
+.quick-product-cost strong { color: #77847d; font-size: inherit; font-weight: 700; }
 .quick-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .quick-actions button { position: relative; min-height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; border-radius: 11px; background: var(--green-soft); color: var(--green-dark); font-size: 15px; font-weight: 750; }
 .quick-add-label { display: block; line-height: 1.05; }
@@ -167,7 +178,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .sort-actions button { min-height: 50px; border: 1px solid #dfe2dd; border-radius: 11px; background: #f7f8f5; color: var(--green-dark); font-size: 13px; font-weight: 700; }
 .sort-actions button:disabled { color: #b4bdb8; background: #f1f2ef; }
 
-.recent-card { margin-top: 16px; padding: 14px 10px 2px; }
 .sale-row { width: 100%; min-height: 72px; display: grid; grid-template-columns: 58px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 10px 1px; background: none; border: 0; border-bottom: 1px solid #eaebe6; text-align: left; }
 .sale-row:last-child { border-bottom: 0; }
 .sale-row time { color: #98a19c; font-size: 13px; }
@@ -546,10 +556,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 @media (max-width: 370px) {
   .page-content { padding-left: 9px; padding-right: 9px; }
-  .metric { padding-left: 9px; padding-right: 9px; }
-  .metric strong { font-size: 15px; }
   .product-card-head { display: block; min-height: 61px; }
   .product-card-head > div { align-items: flex-start; margin-top: 4px; }
+  .quick-product-cost { margin-top: 4px; }
   .quick-actions button { min-height: 46px; font-size: 14px; }
   .sale-row { grid-template-columns: 45px minmax(0,1fr) auto; }
 }
