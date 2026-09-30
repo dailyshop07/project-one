@@ -190,10 +190,9 @@ const averageUnitCostCents = (product: Product, unitType: UnitType, costStates: 
 };
 
 const formatProductAverageCost = (product: Product, costStates: ReturnType<typeof inventoryCostStates>, currency: string) => {
-  const packCost = formatMoney(averageUnitCostCents(product, "pack", costStates), currency);
-  if (!productHasBundle(product)) return `${packCost} / ${productBaseUnitLabel(product)}`;
-  const cartonCost = formatMoney(averageUnitCostCents(product, "carton", costStates), currency);
-  return `${productBaseUnitLabel(product)} ${packCost} · ${productBundleUnitLabel(product)} ${cartonCost}`;
+  const unitType = productHasBundle(product) ? "carton" : "pack";
+  const unitLabel = productHasBundle(product) ? productBundleUnitLabel(product) : productBaseUnitLabel(product);
+  return `每${unitLabel} ${formatMoney(averageUnitCostCents(product, unitType, costStates), currency)}`;
 };
 
 const formatProductSoldQuantity = (product: Product, quantities: Record<UnitType, number>) => {
@@ -564,7 +563,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                     </div>
                   ) : (
                     <>
-                      <div className="quick-product-cost"><span>当前平均成本</span><strong>{formatProductAverageCost(product, costStates, currency)}</strong></div>
+                      <div className="quick-product-cost"><span>当前平均成本</span> <strong>{formatProductAverageCost(product, costStates, currency)}</strong></div>
                       <div className="quick-actions">
                         {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
                         <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
@@ -976,7 +975,7 @@ function SaleRow({ sale, items, currency, onClick }: { sale: Sale; items: SaleIt
 
 function QuickAddButton({ label, priceCents, currency, ariaLabel, count, onAdd }: { label: string; priceCents: number; currency: string; ariaLabel: string; count: number; onAdd: () => void }) {
   const badge = count > 0 ? <span className="quick-add-badge" aria-hidden="true">{count}</span> : null;
-  return <button type="button" onClick={onAdd} aria-label={`${ariaLabel}，零售价 ${formatMoney(priceCents, currency)}`}><span className="quick-add-label">{label}</span><small>零售价 {formatMoney(priceCents, currency)}</small>{badge}</button>;
+  return <button type="button" onClick={onAdd} aria-label={`${ariaLabel}，零售价 ${formatMoney(priceCents, currency)}`}><span className="quick-add-label">{label}</span><small>{formatMoney(priceCents, currency)}</small>{badge}</button>;
 }
 
 function EmptyState({ title, body, action, onAction }: { title: string; body: string; action?: string; onAction?: () => void }) {
