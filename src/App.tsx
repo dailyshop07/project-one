@@ -269,7 +269,7 @@ function useAppData() {
 }
 
 export function App() {
-  const { data, sync, error, showInstallGuide, clearError } = useAppData();
+  const { data, sync, error, showInstallGuide, clearError, refresh } = useAppData();
   const [tab, setTab] = useState<Tab>("today");
   const [notice, setNotice] = useState<Notice>();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -299,8 +299,11 @@ export function App() {
   const mutate = async (action: () => Promise<unknown>, message?: string) => {
     try {
       await action();
-      await syncService.notifyLocalChange();
+      // Refresh this device before waiting for WebRTC. A slow peer must not
+      // delay the local Today metrics after a sale is completed.
+      await refresh();
       if (message) notify(message);
+      void syncService.notifyLocalChange().catch(() => undefined);
       return true;
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : "操作没有完成，请重试。", "error");
@@ -872,7 +875,7 @@ function InventoryPage({ data, currency, onRestock, onCount, onHistory, onSuppli
           const low = stock <= product.lowStockThresholdPacks;
           const value = inventoryValueCentsAtAverage(stock, product, costStates);
           return <article className="inventory-row" key={product.id}>
-                  <button className="inventory-main" onClick={() => onHistory(product)}><strong>{product.name}</strong><div className="inventory-stock-line"><span className={stock < 0 ? "danger-text" : low ? "warning-text" : ""}>{formatProductStock(stock, product)}</span><strong>库存货值 {formatMoney(value, currency)}</strong></div><small>{product.categoryKind === "tobacco" ? `规格 ${formatTobaccoSpec(product.unitWeightGrams)} · 最低库存 ${(product.lowStockThresholdPacks / 1000).toLocaleString("zh-CN", { maximumFractionDigits: 3 })} 公斤` : `最低库存 ${productHasBundle(product) ? `${thresholdCartons(product.lowStockThresholdPacks, product.packsPerCarton)} ${productBundleUnitLabel(product)}` : `${product.lowStockThresholdPacks} ${productBaseUnitLabel(product)}`}`}</small></button>
+                  <button className="inventory-main" onClick={() => onHistory(product)}><strong>{product.name}</strong><div className="inventory-stock-line"><span className={stock < 0 ? "danger-text" : low ? "warning-text" : ""}>{formatProductStock(stock, product)}</span><strong>库存货值 {formatMoney(value, currency)}</strong></div><small>当前平均成本 {formatMoney(displayCostCentsAtAverage(product, costStates), currency)} / {product.categoryKind === "tobacco" ? "公斤" : productHasBundle(product) ? productBundleUnitLabel(product) : productBaseUnitLabel(product)}</small></button>
             <div className="inventory-actions"><button className="secondary-button" onClick={() => onCount(product)}>盘点</button><button className="secondary-button" onClick={() => onRestock(product)}>补货</button></div>
           </article>;
         })}
@@ -1180,11 +1183,18 @@ function CountSheet({ product, currentStock, onClose, onSave }: { product: Produ
 function MovementSheet({ product, products, movements, suppliers, onClose, onAdjust }: { product: Product; products: Product[]; movements: InventoryMovement[]; suppliers: AppSnapshot["suppliers"]; onClose: () => void; onAdjust: (delta: number, note: string) => Promise<unknown> }) {
   const labels: Record<InventoryMovement["reason"], string> = { opening: "期初库存", restock: "进货", sale: "销售", manualAdjustment: "人工调整", stocktake: "库存盘点", saleVoid: "交易作废" };
   const tobacco = product.categoryKind === "tobacco";
+  const [deltaInput, setDeltaInput] = useState("");
   const tobaccoProductIds = new Set(products.filter((entry) => entry.categoryKind === "tobacco").map((entry) => entry.id));
   const productMovements = movements.filter((movement) => tobacco ? tobaccoProductIds.has(movement.productId) : movement.productId === product.id);
   const supplierNames = new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
-  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const input = Number(form.get("delta") || 0); const delta = tobacco ? Math.round(input * 1000) : Math.round(input); const note = String(form.get("note") ?? ""); void onAdjust(delta, note).then(() => formElement.reset()); };
-  return <Sheet title={`${product.name} · 库存流水`} onClose={onClose}><div className="movement-list">{productMovements.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).map((movement) => { const supplierName = movement.supplierNameSnapshot ?? (movement.supplierId ? supplierNames.get(movement.supplierId) : undefined); return <div key={movement.id}><span><strong>{labels[movement.reason]}</strong><small>{new Date(movement.occurredAt).toLocaleString("zh-CN")}{supplierName ? ` · 供应商：${supplierName}` : ""}{movement.note ? ` · ${movement.note}` : ""}</small></span><b className={movement.quantityDeltaPacks < 0 ? "danger-text" : ""}>{movement.quantityDeltaPacks > 0 ? "+" : ""}{tobacco ? `${(movement.quantityDeltaPacks / 1000).toLocaleString("zh-CN", { maximumFractionDigits: 3 })} 公斤` : `${movement.quantityDeltaPacks} ${productBaseUnitLabel(product)}`}</b></div>; })}</div><form className="adjustment-form" onSubmit={submit}><h3>人工调整</h3><p>增加请输入正数，减少请输入负数。所有调整都会保留流水。</p><div className="form-grid"><Field label={tobacco ? "变动公斤数" : `变动${productBaseUnitLabel(product)}数`}><input name="delta" type="number" inputMode={tobacco ? "decimal" : "numeric"} required step={tobacco ? "0.001" : "1"} placeholder={tobacco ? "例如 -0.5" : "例如 -2"} /></Field><Field label="原因"><input name="note" required autoComplete="off" /></Field></div><button className="secondary-button">记录调整</button></form></Sheet>;
+  const toggleDeltaSign = () => setDeltaInput((value) => {
+    const trimmed = value.trim();
+    if (!trimmed) return "-";
+    const unsigned = trimmed.replace(/^[+-]/, "");
+    return trimmed.startsWith("-") ? unsigned : `-${unsigned}`;
+  });
+  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const parsedInput = Number(deltaInput); const input = Number.isFinite(parsedInput) ? parsedInput : 0; const delta = tobacco ? Math.round(input * 1000) : Math.round(input); const note = String(form.get("note") ?? ""); void onAdjust(delta, note).then(() => { formElement.reset(); setDeltaInput(""); }); };
+  return <Sheet title={`${product.name} · 库存流水`} onClose={onClose}><div className="movement-list">{productMovements.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).map((movement) => { const supplierName = movement.supplierNameSnapshot ?? (movement.supplierId ? supplierNames.get(movement.supplierId) : undefined); return <div key={movement.id}><span><strong>{labels[movement.reason]}</strong><small>{new Date(movement.occurredAt).toLocaleString("zh-CN")}{supplierName ? ` · 供应商：${supplierName}` : ""}{movement.note ? ` · ${movement.note}` : ""}</small></span><b className={movement.quantityDeltaPacks < 0 ? "danger-text" : ""}>{movement.quantityDeltaPacks > 0 ? "+" : ""}{tobacco ? `${(movement.quantityDeltaPacks / 1000).toLocaleString("zh-CN", { maximumFractionDigits: 3 })} 公斤` : `${movement.quantityDeltaPacks} ${productBaseUnitLabel(product)}`}</b></div>; })}</div><form className="adjustment-form" onSubmit={submit}><h3>人工调整</h3><p>增加请输入正数，减少请输入负数。所有调整都会保留流水。</p><div className="form-grid"><div className="field"><span>{tobacco ? "变动公斤数" : `变动${productBaseUnitLabel(product)}数`}</span><div className="adjustment-input-wrap"><input name="delta" type="text" inputMode={tobacco ? "decimal" : "numeric"} required step={tobacco ? "0.001" : "1"} value={deltaInput} onChange={(event) => setDeltaInput(event.target.value)} aria-label={tobacco ? "变动公斤数" : `变动${productBaseUnitLabel(product)}数`} placeholder={tobacco ? "例如 -0.5" : "例如 -2"} /><button type="button" className="adjustment-sign-button" aria-label="切换增减符号" aria-pressed={deltaInput.trim().startsWith("-")} onClick={toggleDeltaSign}>−</button></div></div><Field label="原因"><input name="note" required autoComplete="off" /></Field></div><button className="secondary-button">记录调整</button></form></Sheet>;
 }
 
 function SaleSheet({ sale, items, currency, onClose, onVoid, onEditPrice }: { sale: Sale; items: SaleItem[]; currency: string; onClose: () => void; onVoid: () => Promise<unknown>; onEditPrice: (itemId: string, priceCents: number) => Promise<boolean> }) {
