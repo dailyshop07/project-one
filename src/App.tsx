@@ -515,9 +515,9 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
       </header>
 
       <section className="metric-grid" aria-label="今日数据">
-        <Metric label="销售额" value={formatMoney(metrics.revenue, currency)} comparison={compareMetric(metrics.revenue, yesterdayMetrics.revenue)} onClick={() => setBreakdownRequest({ metric: "revenue" })} />
-        <Metric label="毛利" value={formatMoney(metrics.profit, currency)} comparison={compareMetric(metrics.profit, yesterdayMetrics.profit)} onClick={() => setBreakdownRequest({ metric: "profit" })} />
-        <Metric label="客户数" value={String(metrics.customers)} comparison={compareMetric(metrics.customers, yesterdayMetrics.customers)} onClick={() => setCustomerHoursOpen(true)} />
+        <Metric icon="revenue" label="销售额" value={formatMoney(metrics.revenue, currency)} comparison={compareMetric(metrics.revenue, yesterdayMetrics.revenue)} onClick={() => setBreakdownRequest({ metric: "revenue" })} />
+        <Metric icon="profit" label="毛利" value={formatMoney(metrics.profit, currency)} comparison={compareMetric(metrics.profit, yesterdayMetrics.profit)} onClick={() => setBreakdownRequest({ metric: "profit" })} />
+        <Metric icon="customers" label="客户数" value={String(metrics.customers)} comparison={compareMetric(metrics.customers, yesterdayMetrics.customers)} onClick={() => setCustomerHoursOpen(true)} />
         <SalesMetric values={salesMetricValues} onClick={() => setSalesHistoryOpen(true)} />
       </section>
 
@@ -932,14 +932,28 @@ function PageHeader({ title, subtitle, action }: { title: string; subtitle: stri
   return <header className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</header>;
 }
 
-function Metric({ label, value, comparison, onClick }: { label: string; value: string; comparison?: MetricComparison; onClick?: () => void }) {
+type MetricIconKind = "revenue" | "profit" | "customers" | "sales";
+
+function MetricIcon({ kind }: { kind: MetricIconKind }) {
+  const paths: Record<MetricIconKind, ReactNode> = {
+    revenue: <><path d="M5 18V11" /><path d="M12 18V7" /><path d="M19 18V3" /><path d="M4 21h17" /></>,
+    profit: <><ellipse cx="8" cy="15" rx="4.5" ry="2.3" /><path d="M3.5 15v3c0 1.3 2 2.3 4.5 2.3s4.5-1 4.5-2.3v-3" /><ellipse cx="16" cy="8" rx="4.5" ry="2.3" /><path d="M11.5 8v3c0 1.3 2 2.3 4.5 2.3s4.5-1 4.5-2.3V8" /></>,
+    customers: <><circle cx="9" cy="9" r="3" /><circle cx="17" cy="10" r="2.5" /><path d="M3.5 20c.4-3.1 2.2-4.7 5.5-4.7s5.1 1.6 5.5 4.7" /><path d="M14.5 15.7c2.8-.2 4.5 1.2 5 3.8" /></>,
+    sales: <><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" /><path d="m4.5 7.5 7.5 4.2 7.5-4.2" /><path d="M12 11.7V21" /></>,
+  };
+  return <span className="metric-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{paths[kind]}</svg></span>;
+}
+
+function Metric({ icon, label, value, comparison, onClick }: { icon?: Exclude<MetricIconKind, "sales">; label: string; value: string; comparison?: MetricComparison; onClick?: () => void }) {
+  const valueLengthClass = value.length >= 9 ? " metric-value-long" : value.length >= 7 ? " metric-value-medium" : "";
   const content = (
     <>
       <div className="metric-head">
+        {icon && <MetricIcon kind={icon} />}
         <span>{label}</span>
       </div>
-      <strong className={`metric-value${value.length > 16 ? " metric-value-compact metric-value-extra-compact" : value.length > 10 ? " metric-value-compact" : ""}`}>{value}</strong>
-      {comparison && <div className={`metric-period-compare ${comparison.tone}`}><span>与昨日同期</span><strong>{comparison.value} {comparison.arrow}</strong></div>}
+      <strong className={`metric-value${valueLengthClass}`} aria-label={value}>{value}</strong>
+      {comparison && <div className={`metric-period-compare ${comparison.tone}`}><span>较昨日同期</span><strong>{comparison.arrow} {comparison.value.replace(/^[+-]/, "")}</strong></div>}
     </>
   );
   return onClick ? <button type="button" className="metric metric-button" onClick={onClick}>{content}</button> : <div className="metric">{content}</div>;
@@ -947,8 +961,11 @@ function Metric({ label, value, comparison, onClick }: { label: string; value: s
 
 function SalesMetric({ values, onClick }: { values: [string, number][]; onClick: () => void }) {
   return <button type="button" className="metric metric-button sales-metric" onClick={onClick} aria-label="查看销量历史">
-    <div className="metric-head"><span>销量</span></div>
-    <div className="sales-metric-values">{values.map(([label, quantity]) => <span className="sales-metric-item" key={label}><strong>{quantity.toLocaleString("zh-CN")}</strong><em>{label}</em></span>)}</div>
+    <div className="metric-head"><MetricIcon kind="sales" /><span>销量</span></div>
+    <div className="sales-metric-values">{values.map(([label, quantity]) => {
+      const formattedQuantity = quantity.toLocaleString("zh-CN");
+      return <span className={`sales-metric-item${formattedQuantity.length > 3 ? " sales-metric-item-long" : ""}`} key={label}><strong>{formattedQuantity}</strong><em>{label}</em></span>;
+    })}</div>
   </button>;
 }
 

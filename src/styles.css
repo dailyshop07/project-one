@@ -55,49 +55,47 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .more-button { isolation: isolate; }
 .more-button span { position: relative; z-index: 1; }
 
-.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin: 1px 0 10px; }
-.metric { min-width: 0; min-height: 80px; padding: 7px 9px; display: flex; flex-direction: column; background: var(--card); border: 1px solid rgba(224,225,219,.75); border-radius: 16px; box-shadow: 0 5px 18px rgba(30,45,38,.035); }
-.metric-head { min-width: 0; min-height: 18px; display: flex; align-items: center; justify-content: center; gap: 6px; text-align: center; }
-.metric span { display: block; min-width: 0; color: #687771; font-size: 13px; font-weight: 650; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.metric-head span { font-size: 16.9px; }
-.metric-value { display: block; align-self: stretch; width: 100%; margin-top: 2px; padding-top: 0; color: #172c25; font-size: clamp(19px, 4.4vw, 25px); font-weight: 800; line-height: 1.05; letter-spacing: -.035em; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.metric-value-compact { font-size: clamp(11px, 3vw, 16px); letter-spacing: -.04em; }
-.metric-value-extra-compact { font-size: clamp(10px, 2.5vw, 14px); letter-spacing: -.045em; }
-.metric-period-compare { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 2px; line-height: 1; white-space: nowrap; }
-.metric-period-compare span { color: var(--muted); font-size: 11.7px; font-weight: 600; letter-spacing: 0; overflow: visible; }
-.metric-period-compare strong { font-size: 14.3px; letter-spacing: 0; }
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: clamp(3px, 1vw, 7px); margin: 1px 0 10px; }
+.metric { min-width: 0; width: 100%; height: 112px; padding: 9px 4px 8px; display: grid; grid-template-rows: 32px minmax(0, 1fr) 21px; align-items: stretch; background: var(--card); border: 1px solid rgba(224,225,219,.75); border-radius: 18px; box-shadow: 0 5px 18px rgba(30,45,38,.035); container-type: inline-size; }
+.metric-head { min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 5px; text-align: center; }
+.metric-head > span:not(.metric-icon) { display: block; min-width: 0; color: #687771; font-size: clamp(11px, 3vw, 16px); font-weight: 650; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: clip; }
+.metric-icon { width: 29px; height: 29px; flex: 0 0 29px; display: grid; place-items: center; border-radius: 50%; background: #e8f3ee; color: var(--green); }
+.metric-icon svg { width: 17px; height: 17px; display: block; }
+.metric-value { display: block; align-self: center; width: 100%; min-width: 0; color: #172c25; font-size: clamp(17px, 5.4vw, 27px); font-weight: 800; line-height: 1; letter-spacing: -.045em; text-align: center; white-space: nowrap; overflow: visible; text-overflow: clip; font-variant-numeric: tabular-nums lining-nums; font-feature-settings: "tnum" 1, "lnum" 1; }
+.metric-value-medium { font-size: clamp(12px, 4.8vw, 24px); letter-spacing: -.06em; }
+.metric-value-long { font-size: clamp(10px, 3.3vw, 18px); letter-spacing: -.08em; transform: scaleX(.95); transform-origin: center; }
+.metric-period-compare { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 2px; margin: 0; line-height: 1; white-space: nowrap; }
+.metric-period-compare > span { display: block; min-width: 0; color: var(--muted); font-size: clamp(6.5px, 1.9vw, 11px); font-weight: 600; letter-spacing: -.06em; white-space: nowrap; overflow: visible; text-overflow: clip; }
+.metric-period-compare strong { flex: 0 0 auto; color: var(--green); font-size: clamp(8px, 2.5vw, 14px); letter-spacing: -.045em; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .metric-period-compare.up strong { color: var(--green); }
 .metric-period-compare.down strong { color: var(--danger); }
 .metric-period-compare.same strong { color: var(--muted); }
 .metric-button { width: 100%; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .metric-button:active, .metric-button:focus-visible { border-color: var(--green); outline: 0; box-shadow: 0 0 0 3px rgba(25,116,91,.12); }
 .sales-metric { text-align: center; }
-.sales-metric-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 2px; margin-top: 4px; }
+.sales-metric-values { min-width: 0; align-self: center; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 2px; }
 .sales-metric-item { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 2px; line-height: 1; }
-.sales-metric-item strong { color: var(--green-dark); font-size: 15px; letter-spacing: -.03em; }
-.sales-metric-item em { color: #698078; font-size: 9px; font-style: normal; font-weight: 750; }
-
-@media (max-width: 390px) {
-  .metric { min-height: 70px; padding: 5px 6px; }
-  .metric-head { gap: 3px; }
-  .metric span { font-size: 11px; }
-  .metric-head span { font-size: 14.3px; }
-  .metric-period-compare { gap: 3px; margin-top: 2px; }
-  .metric-period-compare span { font-size: 8px; }
-  .metric-period-compare strong { font-size: 9px; }
-  .metric-value { margin-top: 2px; padding-top: 0; font-size: clamp(17px, 5.2vw, 21px); }
-}
+.sales-metric-item strong { color: var(--green-dark); font-size: clamp(11px, 3.6vw, 18px); letter-spacing: -.055em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sales-metric-item-long strong { font-size: clamp(8px, 2.4vw, 15px); letter-spacing: -.08em; }
+.sales-metric-item em { color: #698078; font-size: clamp(8px, 2.5vw, 11px); font-style: normal; font-weight: 750; white-space: nowrap; }
 
 @media (max-width: 430px) {
-  .metric { padding-left: 7px; padding-right: 7px; }
+  .metric { height: 108px; grid-template-rows: 28px minmax(0, 1fr) 18px; padding-top: 8px; padding-bottom: 7px; }
   .metric-head { gap: 3px; }
-  .metric span { font-size: 11px; }
-  .metric-head span { font-size: 14.3px; }
-  .metric-period-compare { gap: 2px; }
-  .metric-period-compare span { font-size: 8px; }
+  .metric-icon { width: 24px; height: 24px; flex-basis: 24px; }
+  .metric-icon svg { width: 15px; height: 15px; }
+  .sales-metric-values { gap: 5px 1px; }
+  .metric-period-compare > span { font-size: 7px; }
   .metric-period-compare strong { font-size: 9px; }
-  .sales-metric-item strong { font-size: 13px; }
-  .sales-metric-item em { font-size: 8px; }
+}
+
+@media (max-width: 350px) {
+  .metric { height: 104px; grid-template-rows: 26px minmax(0, 1fr) 18px; padding-left: 3px; padding-right: 3px; }
+  .metric-icon { display: none; }
+  .metric-head > span:not(.metric-icon) { font-size: 10.5px; }
+  .metric-period-compare { gap: 1px; }
+  .metric-period-compare > span { font-size: 6px; letter-spacing: -.08em; }
+  .metric-period-compare strong { font-size: 8px; }
 }
 
 .card { background: var(--card); border: 1px solid rgba(224,225,219,.72); border-radius: 20px; box-shadow: 0 7px 24px rgba(35,48,42,.045); }
@@ -558,8 +556,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 @media (max-width: 370px) {
   .page-content { padding-left: 9px; padding-right: 9px; }
-  .metric { padding-left: 9px; padding-right: 9px; }
-  .metric strong { font-size: 15px; }
   .product-card-head { display: block; min-height: 61px; }
   .product-card-head > div { align-items: flex-start; margin-top: 4px; }
   .quick-product-cost { margin-top: 4px; }
