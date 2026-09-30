@@ -18,7 +18,7 @@ const isBusinessOpen = (date: Date) => {
 const formatTobaccoSpec = (grams?: number) => grams && grams >= 1000 && grams % 1000 === 0 ? `${grams / 1000}公斤/件` : `${grams ?? 0}克/件`;
 
 const syncService = new SyncService(repository);
-const EMPTY_SYNC: SyncViewState = { status: navigator.onLine ? "local" : "offline", peerCount: 0 };
+const EMPTY_SYNC: SyncViewState = { status: navigator.onLine ? "local" : "offline", peerCount: 0, peerStatuses: {} };
 
 const centsFromInput = (value: FormDataEntryValue | string | null) => Math.max(0, Math.round(Number(value || 0) * 100));
 const optionalCentsFromInput = (value: FormDataEntryValue | string | null) => {
@@ -1278,11 +1278,13 @@ function InviteQrSheet({ secret, onClose, onNotice, onShare }: { secret: string;
   return <Sheet title="扫码邀请设备" onClose={onClose}><div className="invite-qr-sheet"><p className="invite-qr-lead">请让另一台手机打开相机，对准下面的二维码。扫码后会自动加入这组数据。</p><div className="invite-qr-frame">{qrDataUrl ? <img src={qrDataUrl} alt="Project One 私密邀请二维码" /> : qrError ? <p className="invite-qr-error">二维码生成失败，请使用下面的分享方式。</p> : <span className="invite-qr-loading">正在生成二维码…</span>}</div><p className="privacy-note">二维码只在本机生成，内容是当前设备的私密邀请链接。请不要转发给不相关的人。</p><div className="invite-qr-actions"><button className="secondary-button" type="button" onClick={() => void copyInvite()}>复制邀请链接</button><button className="primary-button" type="button" onClick={() => void onShare()}>发送邀请链接</button></div></div></Sheet>;
 }
 
+const installGuideAsset = (filename: string) => `${import.meta.env.BASE_URL.replace(/\/?$/, "/")}install-guide/${filename}`;
+
 const installGuideSteps = [
-  { title: "扫码后停留在邀请页面", body: "不要返回主页，也不要另开普通网址。保持这个带有邀请链接的 Safari 页面打开。", image: "/install-guide/scan-invite.png", alt: "手持 iPhone 显示邀请页面的真实操作图", action: "下一步" },
-  { title: "点击 Safari 的分享按钮", body: "在屏幕底部工具栏点方框向上的分享图标，打开系统分享菜单。", image: "/install-guide/share-safari.png", alt: "iPhone Safari 底部分享按钮被黄色圈出", action: "下一步" },
-  { title: "选择“添加到主屏幕”", body: "在分享菜单中找到“添加到主屏幕”，点进去并确认添加。", image: "/install-guide/add-to-home-screen.png", alt: "iPhone 分享菜单中的 Add to Home Screen 被黄色圈出", action: "下一步" },
-  { title: "从主屏幕打开 Daily Shop", body: "回到 iPhone 主屏幕，点击新出现的 Daily Shop 图标，两台手机保持打开后会自动连接。", image: "/install-guide/open-daily-shop.png", alt: "iPhone 主屏幕上的 Daily Shop 图标被黄色圈出", action: "完成" },
+  { title: "扫码后停留在邀请页面", body: "不要返回主页，也不要另开普通网址。保持这个带有邀请链接的 Safari 页面打开。", image: installGuideAsset("scan-invite.png"), alt: "手持 iPhone 显示邀请页面的真实操作图", action: "下一步" },
+  { title: "点击 Safari 的分享按钮", body: "在屏幕底部工具栏点方框向上的分享图标，打开系统分享菜单。", image: installGuideAsset("share-safari.png"), alt: "iPhone Safari 底部分享按钮被黄色圈出", action: "下一步" },
+  { title: "选择“添加到主屏幕”", body: "在分享菜单中找到“添加到主屏幕”，点进去并确认添加。", image: installGuideAsset("add-to-home-screen.png"), alt: "iPhone 分享菜单中的 Add to Home Screen 被黄色圈出", action: "下一步" },
+  { title: "从主屏幕打开 Daily Shop", body: "回到 iPhone 主屏幕，点击新出现的 Daily Shop 图标，两台手机保持打开后会自动连接。", image: installGuideAsset("open-daily-shop.png"), alt: "iPhone 主屏幕上的 Daily Shop 图标被黄色圈出", action: "完成" },
 ] as const;
 
 function InstallGuideArt({ image, alt }: { image: string; alt: string }) {
@@ -1296,9 +1298,54 @@ function InviteInstallSheet({ onClose }: { onClose: () => void }) {
   return <Sheet title="安装并保持连接" onClose={onClose}><div className="invite-install-sheet"><div className="invite-install-progress" aria-label={`第 ${step + 1} 步，共 ${installGuideSteps.length} 步`}>{installGuideSteps.map((item, index) => <button type="button" key={item.image} className={index === step ? "active" : ""} aria-label={`第 ${index + 1} 步`} onClick={() => setStep(index)} />)}</div><InstallGuideArt image={current.image} alt={current.alt} /><div className="invite-install-copy"><span>第 {step + 1} 步 / {installGuideSteps.length}</span><h3>{current.title}</h3><p>{current.body}</p></div><button className="primary-button" type="button" onClick={next}>{current.action}</button>{step > 0 && <button className="text-button" type="button" onClick={() => setStep((value) => value - 1)}>上一步</button>}<button className="secondary-button" type="button" onClick={onClose}>暂时继续使用 Safari</button></div></Sheet>;
 }
 
-function PeerList({ data }: { data: AppSnapshot }) {
+function PeerList({ data, sync, onNotice }: { data: AppSnapshot; sync: SyncViewState; onNotice: (message: string, kind?: Notice["kind"]) => void }) {
+  const [openDeviceId, setOpenDeviceId] = useState<string>();
+  const [busyDeviceId, setBusyDeviceId] = useState<string>();
   const peers = data.peers.filter((peer) => peer.deviceId !== data.device.deviceId);
-  return <div className="peer-list"><div className="peer-section-heading"><strong>同一数据组的其他手机</strong><small>{peers.length ? `${peers.length} 台已发现` : "等待加入"}</small></div>{peers.length ? peers.map((peer) => <div className="peer-row" key={peer.deviceId}><span className="peer-avatar">{peer.label.slice(0, 1).toUpperCase()}</span><span className="peer-main"><strong>{peer.label}</strong><small>ID {peer.deviceId.slice(0, 8)} · 最近连接 {new Date(peer.lastSeenAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</small></span><span className="peer-status"><i />{peer.lastSyncedAt ? "已同步" : "已连接"}</span></div>) : <p className="peer-empty">还没有发现其他手机。对方打开邀请链接并连接后，会出现在这里。</p>}</div>;
+
+  const runPeerAction = async (peer: AppSnapshot["peers"][number], action: "disconnect" | "reconnect" | "unlink" | "allow" | "clear") => {
+    if (action === "unlink" && !window.confirm(`确定解绑“${peer.label}”吗？本机将拒绝它再次加入这组数据。`)) return;
+    if (action === "clear" && !window.confirm(`确定清除“${peer.label}”的设备记录吗？这不会删除双方的业务数据。`)) return;
+    setBusyDeviceId(peer.deviceId);
+    try {
+      if (action === "disconnect") await syncService.disconnectPeer(peer.deviceId);
+      if (action === "reconnect") await syncService.reconnectPeer(peer.deviceId);
+      if (action === "unlink") await syncService.unlinkPeer(peer.deviceId);
+      if (action === "allow") await syncService.allowPeer(peer.deviceId);
+      if (action === "clear") await syncService.clearPeerRecord(peer.deviceId);
+      const message = action === "disconnect"
+        ? `“${peer.label}”已断开连接，可随时重新连接。`
+        : action === "reconnect"
+          ? `正在重新连接“${peer.label}”。`
+          : action === "unlink"
+            ? `“${peer.label}”已解绑，本机会拒绝它再次加入。`
+            : action === "allow"
+              ? `已允许“${peer.label}”重新连接。`
+              : `已清除“${peer.label}”的本机设备记录。`;
+      onNotice(message);
+      setOpenDeviceId(undefined);
+    } catch (reason) {
+      onNotice(reason instanceof Error ? reason.message : "设备操作没有完成，请重试。", "error");
+    } finally {
+      setBusyDeviceId(undefined);
+    }
+  };
+
+  const statusLabel = (peer: AppSnapshot["peers"][number]) => {
+    const status = sync.peerStatuses[peer.deviceId];
+    if (status === "unlinked") return "已解绑";
+    if (status === "disconnected") return "已断开";
+    if (status === "connected") return peer.lastSyncedAt ? "已同步" : "已连接";
+    return "已发现";
+  };
+
+  return <div className="peer-list"><div className="peer-section-heading"><strong>同一数据组的其他手机</strong><small>{peers.length ? `${peers.length} 台已发现` : "等待加入"}</small></div>{peers.length ? peers.map((peer) => {
+    const status = sync.peerStatuses[peer.deviceId] ?? "known";
+    const menuOpen = openDeviceId === peer.deviceId;
+    const busy = busyDeviceId === peer.deviceId;
+    const primaryAction = status === "unlinked" ? "allow" : status === "disconnected" ? "reconnect" : "disconnect";
+    return <div className="peer-entry" key={peer.deviceId}><div className="peer-row"><span className="peer-avatar">{peer.label.slice(0, 1).toUpperCase()}</span><span className="peer-main"><strong>{peer.label}</strong><small>ID {peer.deviceId.slice(0, 8)} · 最近连接 {new Date(peer.lastSeenAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</small></span><span className={`peer-status ${status}`}><i />{statusLabel(peer)}</span><button className="peer-action-toggle" type="button" aria-expanded={menuOpen} aria-label={`管理${peer.label}`} onClick={() => setOpenDeviceId(menuOpen ? undefined : peer.deviceId)}>{menuOpen ? "收起" : "操作"}</button></div>{menuOpen && <div className="peer-actions" aria-label={`${peer.label}的设备操作`}><button type="button" disabled={busy} onClick={() => void runPeerAction(peer, primaryAction)}>{primaryAction === "allow" ? "允许重新连接" : primaryAction === "reconnect" ? "重新连接" : "断开连接"}</button>{status !== "unlinked" && <button type="button" className="peer-unlink-action" disabled={busy} onClick={() => void runPeerAction(peer, "unlink")}>解绑设备</button>}<button type="button" className="peer-clear-action" disabled={busy} onClick={() => void runPeerAction(peer, "clear")}>清除记录</button></div>}</div>;
+  }) : <p className="peer-empty">还没有发现其他手机。对方打开邀请链接并连接后，会出现在这里。</p>}</div>;
 }
 
 function SettingsSheet({ data, sync, onClose, onNotice }: { data: AppSnapshot; sync: SyncViewState; onClose: () => void; onNotice: (message: string, kind?: Notice["kind"]) => void }) {
@@ -1373,7 +1420,7 @@ function SettingsSheet({ data, sync, onClose, onNotice }: { data: AppSnapshot; s
   const connectionDetail = data.pendingCount ? `${data.pendingCount} 项等待同步` : sync.lastSyncedAt ? `最后同步 ${formatTime(sync.lastSyncedAt)}` : sync.status === "connecting" ? "首次连接通常需要几秒" : sync.status === "pending" ? "请让另一台手机也保持打开" : "本机数据已安全保存";
   const backupKindLabel = (record: LocalBackupRecord) => record.kind === "daily" ? "每日自动备份" : record.kind === "manual" ? "手动备份" : "恢复前保护备份";
   const latestBackup = localBackups[0];
-  return <><Sheet title="设置" onClose={onClose}><div className="settings-list"><section><h3>设备连接</h3><div className="setting-row"><span><strong>{statusText}</strong><small>{connectionDetail}</small></span><span className={`connection-dot ${sync.status}`} /></div><button className="setting-button" onClick={() => setInviteQrOpen(true)}>显示邀请二维码</button><button className="setting-button" onClick={() => void shareInvite()}>发送邀请链接</button><p className="privacy-note">两台手机需要同时打开 Daily Shop。首次连接可能需要几秒；连接断开后会每秒自动重试，直到恢复。二维码和邀请链接包含私密连接信息，请只发送给可信的人。</p><PeerList data={data} /></section><section><h3>本机信息</h3><DeviceNameInput value={data.device.label} onSave={(label) => void (async () => { await repository.updateDeviceLabel(label); await syncService.updateDeviceLabel(label); })()} /><div className="setting-row"><span><strong>设备 ID</strong><small>{data.device.deviceId.slice(0, 8)}</small></span></div><p className="privacy-note">每笔销售会保留本机名称，用来标记是谁在这台设备上记账。</p>{data.conflictCount > 0 && <p className="privacy-note">已自动处理 {data.conflictCount} 次同时修改冲突。</p>}</section><section><h3>备份</h3><div className="setting-row"><span><strong>每天晚上 8 点后自动备份</strong><small>{latestBackup ? `最近：${new Date(latestBackup.createdAt).toLocaleString("zh-CN")} · 共 ${localBackups.length} 份` : "应用会在 20:00 后首次打开时补做备份"}</small></span><span className="backup-status-dot" /></div><button className="setting-button" disabled={backupBusy} onClick={() => void createManualBackup()}>立即保存一份本机备份</button><button className="setting-button" onClick={() => void downloadBackupFile()}>导出备份到文件</button><button className="setting-button" onClick={() => fileRef.current?.click()}>从文件导入备份</button><input ref={fileRef} className="hidden-input" type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])} /><div className="backup-history">{localBackups.length ? localBackups.map((record) => <div className="backup-history-row" key={record.id}><span><strong>{backupKindLabel(record)}</strong><small>{new Date(record.createdAt).toLocaleString("zh-CN")}</small></span><button type="button" disabled={backupBusy} onClick={() => void restoreLocalBackup(record)}>恢复</button></div>) : <p className="backup-empty">还没有自动备份。每天 20:00 后打开应用就会生成第一份。</p>}</div><p className="privacy-note">自动备份保存在本机浏览器存储，不会上传网络；清除 Safari 网站数据或卸载应用后，本机备份也会消失，重要时请导出到“文件”。</p></section><section className="danger-section"><h3>数据操作</h3><div className="data-action-buttons"><button className="setting-button" disabled={backupBusy} onClick={() => void exportManualBackup()}>备份</button><button className="setting-button danger" disabled={backupBusy} onClick={() => void resetBusinessData()}>数据重置</button></div><p className="privacy-note">重置前请先点击“备份”，确认后本机业务数据会被清空。</p></section></div></Sheet>{inviteQrOpen && <InviteQrSheet secret={data.pairing.secret} onClose={() => setInviteQrOpen(false)} onNotice={onNotice} onShare={shareInvite} />}</>;
+  return <><Sheet title="设置" onClose={onClose}><div className="settings-list"><section><h3>设备连接</h3><div className="setting-row"><span><strong>{statusText}</strong><small>{connectionDetail}</small></span><span className={`connection-dot ${sync.status}`} /></div><button className="setting-button" onClick={() => setInviteQrOpen(true)}>显示邀请二维码</button><button className="setting-button" onClick={() => void shareInvite()}>发送邀请链接</button><p className="privacy-note">两台手机需要同时打开 Daily Shop。首次连接可能需要几秒；连接断开后会每秒自动重试，直到恢复。二维码和邀请链接包含私密连接信息，请只发送给可信的人。</p><PeerList data={data} sync={sync} onNotice={onNotice} /></section><section><h3>本机信息</h3><DeviceNameInput value={data.device.label} onSave={(label) => void (async () => { await repository.updateDeviceLabel(label); await syncService.updateDeviceLabel(label); })()} /><div className="setting-row"><span><strong>设备 ID</strong><small>{data.device.deviceId.slice(0, 8)}</small></span></div><p className="privacy-note">每笔销售会保留本机名称，用来标记是谁在这台设备上记账。</p>{data.conflictCount > 0 && <p className="privacy-note">已自动处理 {data.conflictCount} 次同时修改冲突。</p>}</section><section><h3>备份</h3><div className="setting-row"><span><strong>每天晚上 8 点后自动备份</strong><small>{latestBackup ? `最近：${new Date(latestBackup.createdAt).toLocaleString("zh-CN")} · 共 ${localBackups.length} 份` : "应用会在 20:00 后首次打开时补做备份"}</small></span><span className="backup-status-dot" /></div><button className="setting-button" disabled={backupBusy} onClick={() => void createManualBackup()}>立即保存一份本机备份</button><button className="setting-button" onClick={() => void downloadBackupFile()}>导出备份到文件</button><button className="setting-button" onClick={() => fileRef.current?.click()}>从文件导入备份</button><input ref={fileRef} className="hidden-input" type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])} /><div className="backup-history">{localBackups.length ? localBackups.map((record) => <div className="backup-history-row" key={record.id}><span><strong>{backupKindLabel(record)}</strong><small>{new Date(record.createdAt).toLocaleString("zh-CN")}</small></span><button type="button" disabled={backupBusy} onClick={() => void restoreLocalBackup(record)}>恢复</button></div>) : <p className="backup-empty">还没有自动备份。每天 20:00 后打开应用就会生成第一份。</p>}</div><p className="privacy-note">自动备份保存在本机浏览器存储，不会上传网络；清除 Safari 网站数据或卸载应用后，本机备份也会消失，重要时请导出到“文件”。</p></section><section className="danger-section"><h3>数据操作</h3><div className="data-action-buttons"><button className="setting-button" disabled={backupBusy} onClick={() => void exportManualBackup()}>备份</button><button className="setting-button danger" disabled={backupBusy} onClick={() => void resetBusinessData()}>数据重置</button></div><p className="privacy-note">重置前请先点击“备份”，确认后本机业务数据会被清空。</p></section></div></Sheet>{inviteQrOpen && <InviteQrSheet secret={data.pairing.secret} onClose={() => setInviteQrOpen(false)} onNotice={onNotice} onShare={shareInvite} />}</>;
 }
 
 function DeviceNameInput({ value, onSave }: { value: string; onSave: (value: string) => void }) {

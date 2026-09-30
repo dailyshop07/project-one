@@ -484,8 +484,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .peer-section-heading { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px 6px; }
 .peer-section-heading strong { color: var(--green); font-size: 12px; }
 .peer-section-heading small { color: var(--muted); font-size: 10px; }
+.peer-entry { border-bottom: 1px solid #ecece8; }
+.peer-entry:last-child { border-bottom: 0; }
 .peer-row { min-height: 66px; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #ecece8; }
-.peer-row:last-child { border-bottom: 0; }
+.peer-entry .peer-row { border-bottom: 0; }
 .peer-avatar { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 11px; background: var(--green-soft); color: var(--green-dark); font-size: 14px; font-weight: 800; }
 .peer-main { min-width: 0; flex: 1 1 auto; }
 .peer-main strong, .peer-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -493,6 +495,16 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .peer-main small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .peer-status { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: var(--green); font-size: 10px; font-weight: 750; }
 .peer-status i { width: 7px; height: 7px; border-radius: 50%; background: #51a683; box-shadow: 0 0 0 3px #e4f1eb; }
+.peer-status.disconnected, .peer-status.known { color: var(--muted); }
+.peer-status.disconnected i, .peer-status.known i { background: #a6b0aa; box-shadow: 0 0 0 3px #edf0ed; }
+.peer-status.unlinked { color: var(--danger); }
+.peer-status.unlinked i { background: #ad7b72; box-shadow: 0 0 0 3px #f2e9e7; }
+.peer-action-toggle { min-height: 32px; flex: 0 0 auto; border: 1px solid #dce5df; border-radius: 9px; padding: 0 8px; background: white; color: var(--green-dark); font-size: 11px; font-weight: 750; }
+.peer-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 0 14px 11px 58px; }
+.peer-actions button { min-height: 36px; border: 1px solid #dce5df; border-radius: 9px; background: white; color: var(--green-dark); font-size: 11px; font-weight: 700; }
+.peer-actions button:disabled { opacity: .55; cursor: wait; }
+.peer-actions .peer-unlink-action { color: #8a5149; border-color: #eadbd7; }
+.peer-actions .peer-clear-action { color: var(--muted); }
 .peer-empty { margin: 0; padding: 12px 14px 13px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .backup-status-dot { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; background: #51a683; box-shadow: 0 0 0 4px #e4f1eb; }
 .backup-history { display: grid; gap: 0; border-top: 1px solid #ecece8; }
