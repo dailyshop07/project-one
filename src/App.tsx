@@ -183,10 +183,25 @@ const buildHourlyCustomerRows = (sales: Sale[], asOf: Date): HourlyCustomerRow[]
   });
 };
 
-const quickAddCostCents = (product: Product, unitType: UnitType, costStates: ReturnType<typeof inventoryCostStates>) => {
+const averageUnitCostCents = (product: Product, unitType: UnitType, costStates: ReturnType<typeof inventoryCostStates>) => {
   const baseCost = averageCostCentsForProduct(product, costStates);
   if (product.categoryKind === "tobacco") return baseCost * Math.max(1, product.unitWeightGrams ?? 1);
   return unitType === "carton" ? baseCost * Math.max(1, product.packsPerCarton) : baseCost;
+};
+
+const formatProductAverageCost = (product: Product, costStates: ReturnType<typeof inventoryCostStates>, currency: string) => {
+  const packCost = formatMoney(averageUnitCostCents(product, "pack", costStates), currency);
+  if (!productHasBundle(product)) return `${packCost} / ${productBaseUnitLabel(product)}`;
+  const cartonCost = formatMoney(averageUnitCostCents(product, "carton", costStates), currency);
+  return `${productBaseUnitLabel(product)} ${packCost} · ${productBundleUnitLabel(product)} ${cartonCost}`;
+};
+
+const formatProductSoldQuantity = (product: Product, quantities: Record<UnitType, number>) => {
+  const parts = [
+    productHasBundle(product) && quantities.carton > 0 ? `${quantities.carton}${productBundleUnitLabel(product)}` : "",
+    quantities.pack > 0 ? `${quantities.pack}${productBaseUnitLabel(product)}` : "",
+  ].filter(Boolean);
+  return parts.length ? `已售 ${parts.join(" ")}` : "已售 0";
 };
 
 function useAppData() {
@@ -469,6 +484,12 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
   });
   const todaySaleIds = new Set(sales.map((sale) => sale.id));
   const todayItems = data.saleItems.filter((item) => todaySaleIds.has(item.saleId));
+  const todayProductQuantities = new Map<string, Record<UnitType, number>>();
+  todayItems.forEach((item) => {
+    const quantities = todayProductQuantities.get(item.productId) ?? { pack: 0, carton: 0 };
+    quantities[item.unitType] += item.quantity;
+    todayProductQuantities.set(item.productId, quantities);
+  });
   const breakdownRows = breakdownRequest ? buildBreakdownRows(todayItems, data.products, breakdownRequest) : [];
   const breakdownTotal = breakdownRequest?.metric === "quantity"
     ? metrics.unitTotals[breakdownRequest.unitLabel ?? ""] ?? 0
@@ -534,7 +555,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                 <article className="quick-product" key={product.id}>
                   <div className="product-card-head">
                     <h3>{product.name}</h3>
-                    <div>{productHasBundle(product) ? <><span>{productBaseUnitLabel(product)} {formatMoney(product.packSalePriceCents, currency)}</span><span>{productBundleUnitLabel(product)} {formatMoney(product.cartonSalePriceCents, currency)}</span></> : <span>{productBaseUnitLabel(product)} {formatMoney(product.packSalePriceCents, currency)}</span>}</div>
+                    <div><span>{formatProductSoldQuantity(product, todayProductQuantities.get(product.id) ?? { pack: 0, carton: 0 })}</span></div>
                   </div>
                   {sorting ? (
                     <div className="sort-actions">
@@ -542,10 +563,13 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                       <button disabled={products.findIndex((item) => item.id === product.id) === products.length - 1} onClick={() => onMove(product.id, "down")}>↓ 下移</button>
                     </div>
                   ) : (
-                    <div className="quick-actions">
-                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} costCents={quickAddCostCents(product, "carton", costStates)} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
-                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} costCents={quickAddCostCents(product, "pack", costStates)} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
-                    </div>
+                    <>
+                      <div className="quick-product-cost"><span>当前平均成本</span><strong>{formatProductAverageCost(product, costStates, currency)}</strong></div>
+                      <div className="quick-actions">
+                        {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
+                        <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
+                      </div>
+                    </>
                   )}
                 </article>
               );
@@ -935,7 +959,7 @@ function Metric({ label, value, comparison, onClick }: { label: string; value: s
         <span>{label}</span>
       </div>
       <strong className={`metric-value${value.length > 16 ? " metric-value-compact metric-value-extra-compact" : value.length > 10 ? " metric-value-compact" : ""}`}>{value}</strong>
-      {comparison && <div className={`metric-period-compare ${comparison.tone}`}><span>以昨日同期相比</span><strong>{comparison.value} {comparison.arrow}</strong></div>}
+      {comparison && <div className={`metric-period-compare ${comparison.tone}`}><span>与昨日同期</span><strong>{comparison.value} {comparison.arrow}</strong></div>}
     </>
   );
   return onClick ? <button type="button" className="metric metric-button" onClick={onClick}>{content}</button> : <div className="metric">{content}</div>;
@@ -950,9 +974,9 @@ function SaleRow({ sale, items, currency, onClick }: { sale: Sale; items: SaleIt
   return <button className="sale-row" onClick={onClick}><time>{formatTime(sale.completedAt)}</time><div><strong>{saleSummary(items) || "交易记录"}</strong><span>毛利 {formatMoney(sale.profitCents, currency)} · 销售：{sale.deviceLabelSnapshot ?? "本机"}</span></div><b>{formatMoney(sale.revenueCents, currency)}</b></button>;
 }
 
-function QuickAddButton({ label, costCents, currency, ariaLabel, count, onAdd }: { label: string; costCents: number; currency: string; ariaLabel: string; count: number; onAdd: () => void }) {
+function QuickAddButton({ label, priceCents, currency, ariaLabel, count, onAdd }: { label: string; priceCents: number; currency: string; ariaLabel: string; count: number; onAdd: () => void }) {
   const badge = count > 0 ? <span className="quick-add-badge" aria-hidden="true">{count}</span> : null;
-  return <button type="button" onClick={onAdd} aria-label={`${ariaLabel}，成本 ${formatMoney(costCents, currency)}`}><span className="quick-add-label">{label}</span><small>成本 {formatMoney(costCents, currency)}</small>{badge}</button>;
+  return <button type="button" onClick={onAdd} aria-label={`${ariaLabel}，零售价 ${formatMoney(priceCents, currency)}`}><span className="quick-add-label">{label}</span><small>零售价 {formatMoney(priceCents, currency)}</small>{badge}</button>;
 }
 
 function EmptyState({ title, body, action, onAction }: { title: string; body: string; action?: string; onAction?: () => void }) {

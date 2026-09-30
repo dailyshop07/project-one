@@ -59,12 +59,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .metric { min-width: 0; min-height: 108px; padding: 13px 13px 12px; display: flex; flex-direction: column; background: var(--card); border: 1px solid rgba(224,225,219,.75); border-radius: 16px; box-shadow: 0 5px 18px rgba(30,45,38,.035); }
 .metric-head { min-width: 0; min-height: 24px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .metric span { display: block; min-width: 0; color: #687771; font-size: 13px; font-weight: 650; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.metric-value { display: block; margin-top: auto; padding-top: 9px; color: #172c25; font-size: clamp(19px, 4.4vw, 25px); font-weight: 800; line-height: 1.05; letter-spacing: -.035em; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.metric-head span { font-size: 16.9px; }
+.metric-value { display: block; align-self: stretch; width: 100%; margin-top: auto; padding-top: 9px; color: #172c25; font-size: clamp(19px, 4.4vw, 25px); font-weight: 800; line-height: 1.05; letter-spacing: -.035em; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .metric-value-compact { font-size: clamp(11px, 3vw, 16px); letter-spacing: -.04em; }
 .metric-value-extra-compact { font-size: clamp(10px, 2.5vw, 14px); letter-spacing: -.045em; }
 .metric-period-compare { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 7px; line-height: 1; white-space: nowrap; }
-.metric-period-compare span { color: var(--muted); font-size: 9px; font-weight: 600; letter-spacing: 0; overflow: visible; }
-.metric-period-compare strong { font-size: 11px; letter-spacing: 0; }
+.metric-period-compare span { color: var(--muted); font-size: 11.7px; font-weight: 600; letter-spacing: 0; overflow: visible; }
+.metric-period-compare strong { font-size: 14.3px; letter-spacing: 0; }
 .metric-period-compare.up strong { color: var(--green); }
 .metric-period-compare.down strong { color: var(--danger); }
 .metric-period-compare.same strong { color: var(--muted); }
@@ -75,9 +76,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .metric { min-height: 103px; padding: 10px 8px 10px; }
   .metric-head { gap: 3px; }
   .metric span { font-size: 11px; }
+  .metric-head span { font-size: 14.3px; }
   .metric-period-compare { gap: 3px; margin-top: 6px; }
-  .metric-period-compare span { font-size: 8px; }
-  .metric-period-compare strong { font-size: 9px; }
+  .metric-period-compare span { font-size: 10.4px; }
+  .metric-period-compare strong { font-size: 11.7px; }
   .metric-value { padding-top: 9px; font-size: clamp(17px, 5.2vw, 21px); }
 }
 
@@ -85,9 +87,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .metric { padding-left: 7px; padding-right: 7px; }
   .metric-head { gap: 3px; }
   .metric span { font-size: 11px; }
+  .metric-head span { font-size: 14.3px; }
   .metric-period-compare { gap: 2px; }
-  .metric-period-compare span { font-size: 7px; }
-  .metric-period-compare strong { font-size: 8px; }
+  .metric-period-compare span { font-size: 9.1px; }
+  .metric-period-compare strong { font-size: 10.4px; }
 }
 
 .card { background: var(--card); border: 1px solid rgba(224,225,219,.72); border-radius: 20px; box-shadow: 0 7px 24px rgba(35,48,42,.045); }
@@ -157,6 +160,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .product-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; min-height: 42px; }
 .product-card-head h3 { margin: 0; font-size: 16px; line-height: 1.18; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .product-card-head > div { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; color: #77847d; font-size: 10px; line-height: 1.55; white-space: nowrap; }
+.quick-product-cost { min-height: 31px; display: grid; gap: 2px; margin: 2px 0 7px; color: #77847d; font-size: 9px; line-height: 1.25; }
+.quick-product-cost span { color: #77847d; }
+.quick-product-cost strong { color: var(--green-dark); font-size: 10px; font-weight: 700; white-space: normal; }
 .quick-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .quick-actions button { position: relative; min-height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; border-radius: 11px; background: var(--green-soft); color: var(--green-dark); font-size: 15px; font-weight: 750; }
 .quick-add-label { display: block; line-height: 1.05; }
@@ -550,6 +556,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .metric strong { font-size: 15px; }
   .product-card-head { display: block; min-height: 61px; }
   .product-card-head > div { align-items: flex-start; margin-top: 4px; }
+  .quick-product-cost { margin-top: 4px; }
   .quick-actions button { min-height: 46px; font-size: 14px; }
   .sale-row { grid-template-columns: 45px minmax(0,1fr) auto; }
 }
