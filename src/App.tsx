@@ -191,8 +191,9 @@ const averageUnitCostCents = (product: Product, unitType: UnitType, costStates: 
 
 const formatProductAverageCost = (product: Product, costStates: ReturnType<typeof inventoryCostStates>, currency: string) => {
   const unitType = productHasBundle(product) ? "carton" : "pack";
-  const unitLabel = productHasBundle(product) ? productBundleUnitLabel(product) : productBaseUnitLabel(product);
-  return `每${unitLabel} ${formatMoney(averageUnitCostCents(product, unitType, costStates), currency)}`;
+  const unitLabel = product.categoryKind === "tobacco" ? "公斤" : productHasBundle(product) ? productBundleUnitLabel(product) : productBaseUnitLabel(product);
+  const cost = product.categoryKind === "tobacco" ? displayCostCentsAtAverage(product, costStates) : averageUnitCostCents(product, unitType, costStates);
+  return `${formatMoney(cost, currency)} / ${unitLabel}`;
 };
 
 const formatProductSoldQuantity = (product: Product, quantities: Record<UnitType, number>) => {
