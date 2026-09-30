@@ -5,7 +5,7 @@ import { repository } from "./db/repository";
 import { SyncService, clearPairingSecretFromLocation, clearPendingPairingSecret, createInviteUrl, pairingSecretFromLocation, pendingPairingSecretFromStorage, rememberPairingSecretForInstall, shouldKeepPairingSecretForInstall, type SyncViewState } from "./sync/syncService";
 import type { AppSnapshot, BackupDocument, CartItem, DailyTurnover, InventoryMovement, LocalBackupRecord, Product, Sale, SaleItem, UnitType } from "./types";
 import { activeSales, categoryName, formatDateHeading, formatMoney, formatProductStock, formatTime, localDateKey, productBaseUnitLabel, productBundleUnitLabel, productHasBundle, productUnitLabel, saleSummary, stockMap, thresholdCartons } from "./utils/format";
-import { displayCostCentsAtAverage, inventoryCostStates, inventoryValueCentsAtAverage } from "./utils/cost";
+import { averageCostCentsForProduct, displayCostCentsAtAverage, inventoryCostStates, inventoryValueCentsAtAverage } from "./utils/cost";
 
 type Tab = "today" | "history" | "inventory" | "products" | "turnover";
 type TurnoverField = "cash" | "pos" | "lotteryPayout";
@@ -443,7 +443,9 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
     const timer = window.setInterval(() => setClock(new Date()), 60000);
     return () => window.clearInterval(timer);
   }, []);
-  const today = new Date(clock);
+  // A sale refresh re-renders this page immediately. Use the actual current
+  // time so a newly completed sale is not hidden until the minute timer ticks.
+  const today = new Date();
   const todayKey = localDateKey(today);
   const sales = activeSales(data.sales).filter((sale) => {
     const completedAt = new Date(sale.completedAt);
@@ -522,6 +524,11 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
           <div className="product-grid">
             {products.map((product) => {
               const cartQuantity = cartQuantities.get(product.id) ?? { pack: 0, carton: 0 };
+              const profitFor = (unitType: UnitType) => {
+                const unitsInPacks = unitType === "carton" ? product.packsPerCarton : product.categoryKind === "tobacco" ? product.unitWeightGrams ?? 1 : 1;
+                const salePriceCents = unitType === "carton" ? product.cartonSalePriceCents : product.packSalePriceCents;
+                return salePriceCents - averageCostCentsForProduct(product, costStates) * unitsInPacks;
+              };
               return (
                 <article className="quick-product" key={product.id}>
                   <div className="product-card-info">
@@ -535,8 +542,8 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                     </div>
                   ) : (
                     <div className={`quick-actions${productHasBundle(product) ? "" : " single"}`}>
-                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
-                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
+                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} profitCents={profitFor("carton")} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
+                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} profitCents={profitFor("pack")} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
                     </div>
                   )}
                 </article>
@@ -974,9 +981,16 @@ function SaleRow({ sale, items, currency, onClick }: { sale: Sale; items: SaleIt
   return <button className="sale-row" onClick={onClick}><time>{formatTime(sale.completedAt)}</time><div><strong>{saleSummary(items) || "交易记录"}</strong><span>毛利 {formatMoney(sale.profitCents, currency)} · 销售：{sale.deviceLabelSnapshot ?? "本机"}</span></div><b>{formatMoney(sale.revenueCents, currency)}</b></button>;
 }
 
-function QuickAddButton({ label, priceCents, currency, ariaLabel, count, onAdd }: { label: string; priceCents: number; currency: string; ariaLabel: string; count: number; onAdd: () => void }) {
+const formatProfitCents = (cents: number) => {
+  const absolute = Math.abs(cents);
+  const fractionDigits = cents % 100 === 0 ? 0 : 2;
+  const amount = (absolute / 100).toLocaleString("en-AU", { minimumFractionDigits: fractionDigits, maximumFractionDigits: 2 });
+  return `${cents < 0 ? "−" : "+"}${amount}`;
+};
+
+function QuickAddButton({ label, priceCents, profitCents, currency, ariaLabel, count, onAdd }: { label: string; priceCents: number; profitCents: number; currency: string; ariaLabel: string; count: number; onAdd: () => void }) {
   const badge = count > 0 ? <span className="quick-add-badge" aria-hidden="true">{count}</span> : null;
-  return <button type="button" onClick={onAdd} aria-label={`${ariaLabel}，零售价 ${formatMoney(priceCents, currency)}`}><span className="quick-add-label">{label}</span><small>{formatMoney(priceCents, currency)}</small>{badge}</button>;
+  return <button type="button" onClick={onAdd} aria-label={`${ariaLabel}，零售价 ${formatMoney(priceCents, currency)}，预计利润 ${formatProfitCents(profitCents)}`}><span className="quick-add-label">{label}</span><small>{formatMoney(priceCents, currency)} ({formatProfitCents(profitCents)})</small>{badge}</button>;
 }
 
 function EmptyState({ title, body, action, onAction }: { title: string; body: string; action?: string; onAction?: () => void }) {
