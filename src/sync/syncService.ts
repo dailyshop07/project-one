@@ -14,12 +14,17 @@ const snapshotBatchSize = 50;
 const pendingConnectionNoticeMs = 3_000;
 const minimumResumeRestartIntervalMs = 3_000;
 const connectionRetryIntervalMs = 1_000;
+const blockedPeerSettingKey = "sync.blocked-peer-ids.v1";
+const disconnectedPeerSettingKey = "sync.disconnected-peer-ids.v1";
 
 export interface SyncViewState {
   status: SyncStatus;
   peerCount: number;
   lastSyncedAt?: string;
+  peerStatuses: Record<string, PeerStatus>;
 }
+
+export type PeerStatus = "connected" | "disconnected" | "unlinked" | "known";
 
 type HelloMessage = { protocol: 1; deviceId: string; label: string };
 type OperationsMessage = {
@@ -73,8 +78,11 @@ function makeMessageAction(room: Room, namespace: string): [SendAction, ReceiveA
 export class SyncService {
   private room?: Room;
   private listeners = new Set<(state: SyncViewState) => void>();
-  private state: SyncViewState = { status: navigator.onLine ? "local" : "offline", peerCount: 0 };
+  private state: SyncViewState = { status: navigator.onLine ? "local" : "offline", peerCount: 0, peerStatuses: {} };
   private peerDevices = new Map<string, string>();
+  private blockedPeerIds = new Set<string>();
+  private disconnectedPeerIds = new Set<string>();
+  private peerControlStateLoaded = false;
   private flushing = new Set<string>();
   private snapshotting = new Set<string>();
   private snapshotSynced = new Set<string>();
@@ -105,6 +113,57 @@ export class SyncService {
   private setState(patch: Partial<SyncViewState>) {
     this.state = { ...this.state, ...patch };
     this.listeners.forEach((listener) => listener(this.state));
+  }
+
+  private peerStatuses(): Record<string, PeerStatus> {
+    const statuses: Record<string, PeerStatus> = {};
+    for (const deviceId of this.peerDevices.values()) statuses[deviceId] = "connected";
+    for (const deviceId of this.disconnectedPeerIds) statuses[deviceId] = "disconnected";
+    for (const deviceId of this.blockedPeerIds) statuses[deviceId] = "unlinked";
+    return statuses;
+  }
+
+  private publishPeerStatuses() {
+    this.setState({ peerStatuses: this.peerStatuses() });
+  }
+
+  private async loadPeerControlState() {
+    if (this.peerControlStateLoaded) return;
+    const [blocked, disconnected] = await Promise.all([
+      this.repository.getSetting<unknown>(blockedPeerSettingKey, []),
+      this.repository.getSetting<unknown>(disconnectedPeerSettingKey, []),
+    ]);
+    this.blockedPeerIds = new Set(Array.isArray(blocked) ? blocked.filter((value): value is string => typeof value === "string") : []);
+    this.disconnectedPeerIds = new Set(Array.isArray(disconnected) ? disconnected.filter((value): value is string => typeof value === "string") : []);
+    this.peerControlStateLoaded = true;
+    this.publishPeerStatuses();
+  }
+
+  private async savePeerControlState() {
+    await Promise.all([
+      this.repository.setSetting(blockedPeerSettingKey, Array.from(this.blockedPeerIds)),
+      this.repository.setSetting(disconnectedPeerSettingKey, Array.from(this.disconnectedPeerIds)),
+    ]);
+  }
+
+  private transportPeerIdFor(deviceId: string) {
+    for (const [peerId, knownDeviceId] of this.peerDevices) {
+      if (knownDeviceId === deviceId) return peerId;
+    }
+    return undefined;
+  }
+
+  private closeTransportPeer(peerId?: string) {
+    if (!peerId) return;
+    try {
+      this.room?.getPeers()[peerId]?.close();
+    } catch {
+      // The connection may already have been closed by the browser.
+    }
+  }
+
+  private shouldRejectPeer(deviceId: string) {
+    return this.blockedPeerIds.has(deviceId) || this.disconnectedPeerIds.has(deviceId);
   }
 
   private clearConnectionTimers() {
@@ -315,7 +374,7 @@ export class SyncService {
     this.peerDevices.clear();
     this.snapshotting.clear();
     this.snapshotSynced.clear();
-    this.setState({ status: "connecting", peerCount: 0 });
+    this.setState({ status: "connecting", peerCount: 0, peerStatuses: this.peerStatuses() });
 
     const restart = (async () => {
       try {
@@ -343,11 +402,12 @@ export class SyncService {
     this.stopped = false;
     this.secret = secret;
     this.device = device;
+    await this.loadPeerControlState();
     if (!navigator.onLine) {
-      this.setState({ status: "offline" });
+      this.setState({ status: "offline", peerStatuses: this.peerStatuses() });
       return;
     }
-    this.setState({ status: "connecting" });
+    this.setState({ status: "connecting", peerStatuses: this.peerStatuses() });
     const [roomId, iceServers] = await Promise.all([roomIdFromSecret(secret), this.getIceServers()]);
     const room = joinRoom(
       {
@@ -402,15 +462,13 @@ export class SyncService {
     };
 
     room.onPeerLeave = (peerId) => {
-      const deviceId = this.peerDevices.get(peerId);
       this.peerDevices.delete(peerId);
       this.snapshotting.delete(peerId);
       this.snapshotSynced.delete(peerId);
       this.clearSnapshotWaitersForPeer(peerId);
       for (const key of this.incomingSnapshots.keys()) if (key.startsWith(`${peerId}:`)) this.incomingSnapshots.delete(key);
-      if (deviceId && !Array.from(this.peerDevices.values()).includes(deviceId)) void this.repository.forgetPeer(deviceId);
       const peerCount = Object.keys(room.getPeers()).length;
-      this.setState({ status: peerCount ? "connected" : navigator.onLine ? "pending" : "offline", peerCount });
+      this.setState({ status: peerCount ? "connected" : navigator.onLine ? "pending" : "offline", peerCount, peerStatuses: this.peerStatuses() });
       // Keep the incumbent room subscribed. The returning phone announces as a
       // newcomer, which reconnects faster than making both phones repeatedly
       // leave/rejoin and avoids public-relay rate limits.
@@ -420,15 +478,25 @@ export class SyncService {
     onHello((message: unknown, peerId: string) => {
       if (!isHello(message) || message.deviceId === device.deviceId) return;
       this.peerDevices.set(peerId, message.deviceId);
+      if (this.shouldRejectPeer(message.deviceId)) {
+        this.closeTransportPeer(peerId);
+        this.publishPeerStatuses();
+        return;
+      }
       void (async () => {
         await this.repository.rememberPeer(message.deviceId, message.label);
         await this.sendSnapshotToPeer(peerId, sendOperations);
         await this.flushToPeer(peerId, sendOperations);
+        this.publishPeerStatuses();
       })();
     });
 
     onSyncControl((message: unknown, peerId: string) => {
       if (!isSyncControl(message) || message.senderDeviceId === device.deviceId) return;
+      if (this.shouldRejectPeer(message.senderDeviceId)) {
+        this.closeTransportPeer(peerId);
+        return;
+      }
       if (message.type === "snapshotComplete") {
         this.resolveSnapshot(peerId, message.snapshotId, true);
         return;
@@ -441,6 +509,10 @@ export class SyncService {
 
     onOperations(async (message: unknown, peerId: string) => {
       if (!isOperations(message) || message.senderDeviceId === device.deviceId) return;
+      if (this.shouldRejectPeer(message.senderDeviceId)) {
+        this.closeTransportPeer(peerId);
+        return;
+      }
       try {
         this.setState({ status: "syncing" });
         const operationIds = await this.repository.applyRemoteOperations(message.operations);
@@ -472,6 +544,10 @@ export class SyncService {
 
     onAcknowledgements(async (message: unknown, peerId: string) => {
       if (!isAck(message) || message.senderDeviceId === device.deviceId) return;
+      if (this.shouldRejectPeer(message.senderDeviceId)) {
+        this.closeTransportPeer(peerId);
+        return;
+      }
       await this.repository.acknowledgeOperations(message.operationIds);
       await this.repository.markPeerSynced(message.senderDeviceId);
       this.setState({ status: "connected", lastSyncedAt: new Date().toISOString() });
@@ -479,7 +555,7 @@ export class SyncService {
     });
 
     const peers = Object.keys(room.getPeers());
-    this.setState({ status: peers.length ? "connected" : "connecting", peerCount: peers.length });
+    this.setState({ status: peers.length ? "connected" : "connecting", peerCount: peers.length, peerStatuses: this.peerStatuses() });
     if (peers.length) {
       this.stopConnectionRetry();
       peers.forEach((peerId) => void announcePeer(peerId));
@@ -528,6 +604,55 @@ export class SyncService {
     this.device = { ...this.device, label };
     const [sendHello] = makeMessageAction(this.room, "hello");
     await Promise.all(Object.keys(this.room.getPeers()).map((peerId) => sendHello({ protocol: 1, deviceId: this.device!.deviceId, label }, peerId)));
+  }
+
+  async disconnectPeer(deviceId: string) {
+    if (!deviceId || deviceId === this.device?.deviceId) return;
+    await this.loadPeerControlState();
+    this.disconnectedPeerIds.add(deviceId);
+    this.blockedPeerIds.delete(deviceId);
+    await this.savePeerControlState();
+    this.closeTransportPeer(this.transportPeerIdFor(deviceId));
+    this.publishPeerStatuses();
+  }
+
+  async reconnectPeer(deviceId: string) {
+    if (!deviceId || deviceId === this.device?.deviceId) return;
+    await this.loadPeerControlState();
+    this.disconnectedPeerIds.delete(deviceId);
+    await this.savePeerControlState();
+    this.publishPeerStatuses();
+    if (navigator.onLine) await this.handleOnline(true);
+  }
+
+  async unlinkPeer(deviceId: string) {
+    if (!deviceId || deviceId === this.device?.deviceId) return;
+    await this.loadPeerControlState();
+    this.blockedPeerIds.add(deviceId);
+    this.disconnectedPeerIds.delete(deviceId);
+    await this.savePeerControlState();
+    this.closeTransportPeer(this.transportPeerIdFor(deviceId));
+    this.publishPeerStatuses();
+  }
+
+  async allowPeer(deviceId: string) {
+    if (!deviceId || deviceId === this.device?.deviceId) return;
+    await this.loadPeerControlState();
+    this.blockedPeerIds.delete(deviceId);
+    this.disconnectedPeerIds.delete(deviceId);
+    await this.savePeerControlState();
+    this.publishPeerStatuses();
+    if (navigator.onLine) await this.handleOnline(true);
+  }
+
+  async clearPeerRecord(deviceId: string) {
+    if (!deviceId || deviceId === this.device?.deviceId) return;
+    await this.loadPeerControlState();
+    this.blockedPeerIds.delete(deviceId);
+    this.disconnectedPeerIds.delete(deviceId);
+    await this.savePeerControlState();
+    await this.repository.forgetPeer(deviceId);
+    this.publishPeerStatuses();
   }
 
   async handleOnline(forceReconnect = false) {
@@ -592,7 +717,7 @@ export class SyncService {
     this.peerDevices.clear();
     this.snapshotting.clear();
     this.snapshotSynced.clear();
-    this.setState({ status: navigator.onLine ? "local" : "offline", peerCount: 0 });
+    this.setState({ status: navigator.onLine ? "local" : "offline", peerCount: 0, peerStatuses: this.peerStatuses() });
     void room?.leave().finally(() => {
       this.restarting = false;
     });
