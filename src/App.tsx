@@ -6,7 +6,7 @@ import { repository } from "./db/repository";
 import { SyncService, clearPairingSecretFromLocation, clearPendingPairingSecret, createInviteUrl, pairingSecretFromLocation, pendingPairingSecretFromStorage, rememberPairingSecretForInstall, shouldKeepPairingSecretForInstall, type SyncViewState } from "./sync/syncService";
 import type { AppSnapshot, BackupDocument, CartItem, DailyTurnover, InventoryMovement, LocalBackupRecord, Product, Sale, SaleItem, UnitType } from "./types";
 import { activeSales, categoryName, formatDateHeading, formatMoney, formatProductStock, formatTime, localDateKey, productBaseUnitLabel, productBundleUnitLabel, productHasBundle, productUnitLabel, saleSummary, stockMap, thresholdCartons } from "./utils/format";
-import { averageCostCentsForProduct, displayCostCentsAtAverage, inventoryCostStates, inventoryValueCentsAtAverage } from "./utils/cost";
+import { displayCostCentsAtAverage, inventoryCostStates, inventoryValueCentsAtAverage } from "./utils/cost";
 
 type Tab = "today" | "history" | "inventory" | "products" | "turnover";
 type TurnoverField = "cash" | "pos" | "lotteryPayout";
@@ -181,19 +181,6 @@ const buildHourlyCustomerRows = (sales: Sale[], asOf: Date): HourlyCustomerRow[]
     const startHour = businessStartHour + index;
     return { startHour, endHour: startHour + 1, customers: counts.get(startHour) ?? 0 };
   });
-};
-
-const averageUnitCostCents = (product: Product, unitType: UnitType, costStates: ReturnType<typeof inventoryCostStates>) => {
-  const baseCost = averageCostCentsForProduct(product, costStates);
-  if (product.categoryKind === "tobacco") return baseCost * Math.max(1, product.unitWeightGrams ?? 1);
-  return unitType === "carton" ? baseCost * Math.max(1, product.packsPerCarton) : baseCost;
-};
-
-const formatProductAverageCost = (product: Product, costStates: ReturnType<typeof inventoryCostStates>, currency: string) => {
-  const unitType = productHasBundle(product) ? "carton" : "pack";
-  const unitLabel = product.categoryKind === "tobacco" ? "公斤" : productHasBundle(product) ? productBundleUnitLabel(product) : productBaseUnitLabel(product);
-  const cost = product.categoryKind === "tobacco" ? displayCostCentsAtAverage(product, costStates) : averageUnitCostCents(product, unitType, costStates);
-  return `${formatMoney(cost, currency)} / ${unitLabel}`;
 };
 
 const formatProductSoldQuantity = (product: Product, quantities: Record<UnitType, number>) => {
@@ -542,7 +529,6 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                   <div className="product-card-info">
                     <h3>{product.name}</h3>
                     <span className="product-card-sold">{formatProductSoldQuantity(product, todayProductQuantities.get(product.id) ?? { pack: 0, carton: 0 })}</span>
-                    <div className="quick-product-cost"><span>当前平均成本</span> <strong>{formatProductAverageCost(product, costStates, currency)}</strong></div>
                   </div>
                   {sorting ? (
                     <div className="sort-actions product-sort-actions">
