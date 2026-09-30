@@ -65,16 +65,17 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .metric-value-medium { font-size: clamp(12px, 4.8vw, 24px); letter-spacing: -.06em; }
 .metric-value-long { font-size: clamp(10px, 3.3vw, 18px); letter-spacing: -.08em; transform: scaleX(.95); transform-origin: center; }
 .metric-period-compare { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 2px; margin: 0; line-height: 1; white-space: nowrap; }
-.metric-period-compare > span { display: block; min-width: 0; color: var(--muted); font-size: clamp(6.5px, 1.9vw, 11px); font-weight: 600; letter-spacing: -.06em; white-space: nowrap; overflow: visible; text-overflow: clip; }
-.metric-period-compare strong { flex: 0 0 auto; color: var(--green); font-size: clamp(8px, 2.5vw, 14px); letter-spacing: -.045em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.metric-period-compare > span { display: block; min-width: 0; color: var(--muted); font-size: clamp(5.85px, 1.71vw, 9.9px); font-weight: 600; letter-spacing: -.06em; white-space: nowrap; overflow: visible; text-overflow: clip; }
+.metric-period-compare strong { flex: 0 0 auto; color: var(--green); font-size: clamp(7.2px, 2.25vw, 12.6px); letter-spacing: -.045em; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .metric-period-compare.up strong { color: var(--green); }
 .metric-period-compare.down strong { color: var(--danger); }
 .metric-period-compare.same strong { color: var(--muted); }
 .metric-button { width: 100%; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .metric-button:active, .metric-button:focus-visible { border-color: var(--green); outline: 0; box-shadow: 0 0 0 3px rgba(25,116,91,.12); }
 .sales-metric { text-align: center; }
-.sales-metric-values { min-width: 0; align-self: center; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 2px; }
+.sales-metric-values { min-width: 0; align-self: center; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 2px; transform: translateY(4px); }
 .sales-metric-item { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 2px; line-height: 1; }
+.sales-metric-item:nth-child(4) { transform: translateY(2px); }
 .sales-metric-item strong { color: var(--green-dark); font-size: clamp(11px, 3.6vw, 18px); letter-spacing: -.055em; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sales-metric-item-long strong { font-size: clamp(8px, 2.4vw, 15px); letter-spacing: -.08em; }
 .sales-metric-item em { color: #698078; font-size: clamp(8px, 2.5vw, 11px); font-style: normal; font-weight: 750; white-space: nowrap; }
@@ -85,8 +86,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .metric-icon { width: 24px; height: 24px; flex-basis: 24px; }
   .metric-icon svg { width: 15px; height: 15px; }
   .sales-metric-values { gap: 5px 1px; }
-  .metric-period-compare > span { font-size: 7px; }
-  .metric-period-compare strong { font-size: 9px; }
+  .metric-period-compare > span { font-size: 6.3px; }
+  .metric-period-compare strong { font-size: 8.1px; }
 }
 
 @media (max-width: 350px) {
@@ -94,8 +95,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .metric-icon { display: none; }
   .metric-head > span:not(.metric-icon) { font-size: 10.5px; }
   .metric-period-compare { gap: 1px; }
-  .metric-period-compare > span { font-size: 6px; letter-spacing: -.08em; }
-  .metric-period-compare strong { font-size: 8px; }
+  .metric-period-compare > span { font-size: 5.4px; letter-spacing: -.08em; }
+  .metric-period-compare strong { font-size: 7.2px; }
 }
 
 .card { background: var(--card); border: 1px solid rgba(224,225,219,.72); border-radius: 20px; box-shadow: 0 7px 24px rgba(35,48,42,.045); }
@@ -616,8 +617,8 @@ body { color: var(--ink); }
 .metric-value-medium { font-size: 18px; }
 .metric-value-long { font-size: 13px; }
 .metric-period-compare { gap: 2px; }
-.metric-period-compare > span { color: #89938e; font-size: 9px; letter-spacing: -.04em; }
-.metric-period-compare strong { color: var(--green); font-size: 10px; letter-spacing: -.025em; }
+.metric-period-compare > span { color: #89938e; font-size: 8.1px; letter-spacing: -.04em; }
+.metric-period-compare strong { color: var(--green); font-size: 9px; letter-spacing: -.025em; }
 .sales-metric-values { gap: 4px 1px; }
 .sales-metric-item { gap: 2px; }
 .sales-metric-item strong { color: var(--green-dark); font-size: 14px; letter-spacing: -.045em; }
@@ -632,22 +633,21 @@ body { color: var(--ink); }
 .sort-icon { font-size: 18px; font-weight: 500; line-height: 1; }
 
 .today-page .product-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; }
-.today-page .quick-product { min-width: 0; min-height: 52px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(148px, 46%) 15px; align-items: center; gap: 7px; padding: 7px 8px 7px 10px; border: 0; border-radius: 17px; background: rgba(255,255,254,.98); box-shadow: 0 4px 15px rgba(26, 45, 37, .045); }
+.today-page .quick-product { min-width: 0; min-height: 52px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(148px, 46%); align-items: center; gap: 7px; padding: 7px 8px 7px 10px; border: 0; border-radius: 17px; background: rgba(255,255,254,.98); box-shadow: 0 4px 15px rgba(26, 45, 37, .045); }
 .product-card-info { min-width: 0; display: grid; align-content: center; }
 .product-card-info h3 { min-width: 0; margin: 0; display: -webkit-box; color: #13251f; font-size: 17px; font-weight: 800; line-height: 1.08; letter-spacing: -.02em; overflow: hidden; overflow-wrap: anywhere; text-overflow: ellipsis; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.product-card-sold { min-width: 0; margin-top: 2px; overflow: hidden; color: #77857f; font-size: 13px; line-height: 1.12; text-overflow: ellipsis; white-space: nowrap; }
-.product-card-info .quick-product-cost { min-width: 0; margin: 2px 0 0; overflow: hidden; color: #7d8984; font-size: 13px; line-height: 1.12; text-overflow: ellipsis; white-space: nowrap; }
+.product-card-sold { min-width: 0; margin-top: 2px; overflow: hidden; color: #77857f; font-size: 9px; line-height: 1.12; text-overflow: ellipsis; white-space: nowrap; }
+.product-card-info .quick-product-cost { min-width: 0; margin: 2px 0 0; overflow: hidden; color: #7d8984; font-size: 9px; line-height: 1.12; text-overflow: ellipsis; white-space: nowrap; }
 .product-card-info .quick-product-cost span { color: #7d8984; }
-.product-card-info .quick-product-cost strong { color: #5b6d66; font-size: inherit; font-weight: 700; }
+.product-card-info .quick-product-cost strong { color: inherit; font-size: inherit; font-weight: 400; }
 .today-page .quick-actions { min-width: 0; height: 43px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; overflow: hidden; border-radius: 999px; background: var(--green-soft); }
-.today-page .quick-actions button { min-width: 0; min-height: 43px; height: 43px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 0 4px; border: 0; border-radius: 0; background: transparent; color: var(--green-dark); font-size: 16px; font-weight: 800; }
+.today-page .quick-actions button { min-width: 0; min-height: 43px; height: 43px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 0 4px; border: 0; border-radius: 0; background: transparent; color: var(--green-dark); font-size: 14.4px; font-weight: 800; }
 .today-page .quick-actions button + button { border-left: 1px solid rgba(20, 119, 98, .10); }
 .today-page .quick-add-label { min-width: 0; overflow: hidden; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
-.today-page .quick-actions button small { color: #6a7e76; font-size: 12px; font-weight: 600; line-height: 1; }
+.today-page .quick-actions button small { color: #6a7e76; font-size: 10.8px; font-weight: 600; line-height: 1; }
 .today-page .quick-actions button:active { transform: none; background: rgba(207, 232, 223, .7); }
 .today-page .quick-add-badge { top: 3px; right: 4px; min-width: 18px; height: 18px; border-width: 1px; font-size: 9px; }
-.product-card-chevron { align-self: center; color: #a2aaa6; font-size: 27px; font-weight: 300; line-height: 1; }
-.today-page .product-sort-actions { grid-column: 2 / 4; min-height: 43px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.today-page .product-sort-actions { grid-column: 2 / 3; min-height: 43px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .today-page .product-sort-actions button { min-height: 43px; border-radius: 999px; }
 
 .bottom-nav { height: calc(var(--nav-height) + env(safe-area-inset-bottom)); padding: 6px 7px env(safe-area-inset-bottom); border-top: 1px solid rgba(24, 48, 40, .08); background: rgba(255,254,250,.98); box-shadow: none; }
@@ -671,16 +671,16 @@ body { color: var(--ink); }
   .sales-metric-item strong { font-size: 13px; }
   .category-tabs button { padding-left: 12px; padding-right: 12px; }
   .category-toolbar .sort-toggle { padding-left: 9px; padding-right: 9px; }
-  .today-page .quick-product { grid-template-columns: minmax(0, 1fr) minmax(142px, 46%) 14px; gap: 6px; padding-left: 9px; }
+.today-page .quick-product { grid-template-columns: minmax(0, 1fr) minmax(142px, 46%); gap: 6px; padding-left: 9px; }
   .product-card-info h3 { font-size: 16px; }
-  .product-card-sold, .product-card-info .quick-product-cost { font-size: 12px; }
-  .today-page .quick-actions button { font-size: 15px; }
-  .today-page .quick-actions button small { font-size: 11px; }
+  .product-card-sold, .product-card-info .quick-product-cost { font-size: 8.5px; }
+  .today-page .quick-actions button { font-size: 13.5px; }
+  .today-page .quick-actions button small { font-size: 9.9px; }
 }
 
 @media (max-width: 350px) {
   .page-content.today-page { padding-left: 10px; padding-right: 10px; }
-  .today-page .quick-product { grid-template-columns: minmax(0, 1fr) minmax(132px, 47%) 13px; }
+  .today-page .quick-product { grid-template-columns: minmax(0, 1fr) minmax(132px, 47%); }
   .today-page .quick-actions { height: 41px; }
-  .today-page .quick-actions button { min-height: 41px; height: 41px; font-size: 14px; }
+  .today-page .quick-actions button { min-height: 41px; height: 41px; font-size: 12.6px; }
 }
