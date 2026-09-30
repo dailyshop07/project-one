@@ -11,7 +11,6 @@ Project One is an iPhone-first, local-first PWA for daily records, quick sales, 
 - Trystero/WebRTC is used only to exchange queued operations between paired devices. It is not the database.
 - On iOS, Safari and a standalone Home Screen Web App have separate storage. The invite flow uses a short-lived first-party cookie for the install handoff, and every newly discovered peer receives an idempotent full data snapshot before incremental operations continue.
 - After 20:00 local time, the app creates one automatic local backup per day when it is open or the next time it is opened. It keeps recent backup history on the device for recovery; export a JSON backup to Files for protection against clearing browser data or uninstalling the app.
-- Backup reminders default to once a week after Sunday 12:00 and appear the next time the app is opened; the frequency, weekday, time, and enabled state can be changed in Settings.
 
 ## Local development
 
