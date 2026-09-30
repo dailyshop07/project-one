@@ -55,7 +55,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .more-button { isolation: isolate; }
 .more-button span { position: relative; z-index: 1; }
 
-.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 1px 0 10px; }
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin: 1px 0 10px; }
 .metric { min-width: 0; min-height: 80px; padding: 7px 9px; display: flex; flex-direction: column; background: var(--card); border: 1px solid rgba(224,225,219,.75); border-radius: 16px; box-shadow: 0 5px 18px rgba(30,45,38,.035); }
 .metric-head { min-width: 0; min-height: 18px; display: flex; align-items: center; justify-content: center; gap: 6px; text-align: center; }
 .metric span { display: block; min-width: 0; color: #687771; font-size: 13px; font-weight: 650; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -71,6 +71,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .metric-period-compare.same strong { color: var(--muted); }
 .metric-button { width: 100%; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .metric-button:active, .metric-button:focus-visible { border-color: var(--green); outline: 0; box-shadow: 0 0 0 3px rgba(25,116,91,.12); }
+.sales-metric { text-align: center; }
+.sales-metric-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 2px; margin-top: 4px; }
+.sales-metric-item { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 2px; line-height: 1; }
+.sales-metric-item strong { color: var(--green-dark); font-size: 15px; letter-spacing: -.03em; }
+.sales-metric-item em { color: #698078; font-size: 9px; font-style: normal; font-weight: 750; }
 
 @media (max-width: 390px) {
   .metric { min-height: 70px; padding: 5px 6px; }
@@ -78,8 +83,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .metric span { font-size: 11px; }
   .metric-head span { font-size: 14.3px; }
   .metric-period-compare { gap: 3px; margin-top: 2px; }
-  .metric-period-compare span { font-size: 10.4px; }
-  .metric-period-compare strong { font-size: 11.7px; }
+  .metric-period-compare span { font-size: 8px; }
+  .metric-period-compare strong { font-size: 9px; }
   .metric-value { margin-top: 2px; padding-top: 0; font-size: clamp(17px, 5.2vw, 21px); }
 }
 
@@ -89,12 +94,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .metric span { font-size: 11px; }
   .metric-head span { font-size: 14.3px; }
   .metric-period-compare { gap: 2px; }
-  .metric-period-compare span { font-size: 9.1px; }
-  .metric-period-compare strong { font-size: 10.4px; }
+  .metric-period-compare span { font-size: 8px; }
+  .metric-period-compare strong { font-size: 9px; }
+  .sales-metric-item strong { font-size: 13px; }
+  .sales-metric-item em { font-size: 8px; }
 }
 
 .card { background: var(--card); border: 1px solid rgba(224,225,219,.72); border-radius: 20px; box-shadow: 0 7px 24px rgba(35,48,42,.045); }
-.quick-card, .recent-card, .list-card, .chart-card, .ranking-card { padding: 14px 10px 10px; margin-top: 12px; }
+.quick-card, .list-card, .chart-card, .ranking-card { padding: 14px 10px 10px; margin-top: 12px; }
 .quick-card { margin-top: 9px; }
 .section-title-row { display: flex; justify-content: space-between; align-items: center; min-height: 30px; padding: 0 2px; }
 .section-title-row h2, .chart-card h2 { margin: 0; color: var(--green); font-size: 14px; letter-spacing: .02em; }
@@ -173,7 +180,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .sort-actions button { min-height: 50px; border: 1px solid #dfe2dd; border-radius: 11px; background: #f7f8f5; color: var(--green-dark); font-size: 13px; font-weight: 700; }
 .sort-actions button:disabled { color: #b4bdb8; background: #f1f2ef; }
 
-.recent-card { margin-top: 16px; padding: 14px 10px 2px; }
 .sale-row { width: 100%; min-height: 72px; display: grid; grid-template-columns: 58px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 10px 1px; background: none; border: 0; border-bottom: 1px solid #eaebe6; text-align: left; }
 .sale-row:last-child { border-bottom: 0; }
 .sale-row time { color: #98a19c; font-size: 13px; }
