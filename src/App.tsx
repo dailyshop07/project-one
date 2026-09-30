@@ -943,13 +943,14 @@ function MetricIcon({ kind }: { kind: MetricIconKind }) {
 
 function Metric({ icon, label, value, comparison, onClick }: { icon?: Exclude<MetricIconKind, "sales">; label: string; value: string; comparison?: MetricComparison; onClick?: () => void }) {
   const valueLengthClass = value.length >= 9 ? " metric-value-long" : value.length >= 7 ? " metric-value-medium" : "";
+  const customerValueClass = icon === "customers" ? " metric-value-customer" : "";
   const content = (
     <>
       <div className="metric-head">
         {icon && <MetricIcon kind={icon} />}
         <span>{label}</span>
       </div>
-      <strong className={`metric-value${valueLengthClass}`} aria-label={value}>{value}</strong>
+      <strong className={`metric-value${valueLengthClass}${customerValueClass}`} aria-label={value}>{value}</strong>
       {comparison && <div className={`metric-period-compare ${comparison.tone}`}><span>较昨日同期</span><strong>{comparison.arrow} {comparison.value.replace(/^[+-]/, "")}</strong></div>}
     </>
   );
