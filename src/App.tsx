@@ -159,7 +159,7 @@ type MetricComparison = { value: string; arrow: "↑" | "↓" | "→"; tone: "up
 
 const compareMetric = (current: number, previous: number): MetricComparison => {
   if (previous === 0) return current === 0 ? { value: "0%", arrow: "→", tone: "same" } : { value: "—", arrow: "↑", tone: "up" };
-  const change = Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
+  const change = Math.round(((current - previous) / Math.abs(previous)) * 100);
   if (change === 0) return { value: "0%", arrow: "→", tone: "same" };
   return { value: `${change > 0 ? "+" : ""}${change}%`, arrow: change > 0 ? "↑" : "↓", tone: change > 0 ? "up" : "down" };
 };
@@ -555,7 +555,6 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                       <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
                     </div>
                   )}
-                  {!sorting && <span className="product-card-chevron" aria-hidden="true">›</span>}
                 </article>
               );
             })}
@@ -596,7 +595,7 @@ function BreakdownSheet({ request, rows, total, currency, onClose }: { request: 
             return (
               <div className="breakdown-row" key={`${row.name}-${index}`}>
                 <div className="breakdown-row-main"><span className="breakdown-rank">{index + 1}</span><div className="breakdown-name"><strong>{row.name}</strong><small>销量 {formatQuantitySummary(row.quantityByUnit) || "—"}</small></div><b>{valueLabel}</b></div>
-                <div className="breakdown-row-foot"><span>{total > 0 ? `占比 ${(share * 100).toFixed(1)}%` : "占比 —"}</span><div className="breakdown-share"><i style={{ width: `${Math.min(100, Math.max(0, share * 100))}%` }} /></div></div>
+                <div className="breakdown-row-foot"><span>{total > 0 ? `占比 ${Math.round(share * 100)}%` : "占比 —"}</span><div className="breakdown-share"><i style={{ width: `${Math.min(100, Math.max(0, share * 100))}%` }} /></div></div>
               </div>
             );
           })}
