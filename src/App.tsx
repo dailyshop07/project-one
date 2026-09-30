@@ -503,7 +503,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
     <>
       <header className="today-header">
         <div>
-          <p className="today-date">今日 · {formatDateHeading(today)}</p>
+          <p className="today-date">{formatDateHeading(today).replace(/日(?=周)/, "日 ")}</p>
         </div>
         <div className="today-header-actions">
           <div className="status-group" aria-label="营业与同步状态">
@@ -521,7 +521,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
         <SalesMetric values={salesMetricValues} onClick={() => setSalesHistoryOpen(true)} />
       </section>
 
-      <section className="card quick-card">
+      <section className="quick-card">
         {categories.length > 0 && (
           <div className="category-toolbar">
             <div className="category-tabs" role="tablist" aria-label="商品分类">
@@ -530,7 +530,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                 <button key={category.id} className={categoryId === category.id ? "active" : ""} onClick={() => setCategoryId(category.id)}>{category.name}</button>
               ))}
             </div>
-            <button className="sort-toggle" onClick={() => { if (!sorting) setCategoryId("all"); setSorting((value) => !value); }}>{sorting ? "完成" : "编辑排序"}</button>
+            <button className="sort-toggle" onClick={() => { if (!sorting) setCategoryId("all"); setSorting((value) => !value); }}><span className="sort-icon" aria-hidden="true">↕</span>{sorting ? "完成" : "编辑排序"}</button>
           </div>
         )}
         {products.length ? (
@@ -539,24 +539,23 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
               const cartQuantity = cartQuantities.get(product.id) ?? { pack: 0, carton: 0 };
               return (
                 <article className="quick-product" key={product.id}>
-                  <div className="product-card-head">
+                  <div className="product-card-info">
                     <h3>{product.name}</h3>
-                    <div><span>{formatProductSoldQuantity(product, todayProductQuantities.get(product.id) ?? { pack: 0, carton: 0 })}</span></div>
+                    <span className="product-card-sold">{formatProductSoldQuantity(product, todayProductQuantities.get(product.id) ?? { pack: 0, carton: 0 })}</span>
+                    <div className="quick-product-cost"><span>当前平均成本</span> <strong>{formatProductAverageCost(product, costStates, currency)}</strong></div>
                   </div>
                   {sorting ? (
-                    <div className="sort-actions">
+                    <div className="sort-actions product-sort-actions">
                       <button disabled={products.findIndex((item) => item.id === product.id) === 0} onClick={() => onMove(product.id, "up")}>↑ 上移</button>
                       <button disabled={products.findIndex((item) => item.id === product.id) === products.length - 1} onClick={() => onMove(product.id, "down")}>↓ 下移</button>
                     </div>
                   ) : (
-                    <>
-                      <div className="quick-product-cost"><span>当前平均成本</span> <strong>{formatProductAverageCost(product, costStates, currency)}</strong></div>
-                      <div className="quick-actions">
-                        {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
-                        <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
-                      </div>
-                    </>
+                    <div className="quick-actions">
+                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
+                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
+                    </div>
                   )}
+                  {!sorting && <span className="product-card-chevron" aria-hidden="true">›</span>}
                 </article>
               );
             })}
@@ -922,14 +921,27 @@ function ProductsPage({ data, currency, onAdd, onEdit, onCategories }: { data: A
 }
 
 function BottomNav({ active, onChange }: { active: Tab; onChange: (tab: Tab) => void }) {
-  const items: { id: Tab; icon: string; label: string }[] = [
-    { id: "today", icon: "✓", label: "今日" }, { id: "history", icon: "◷", label: "历史" }, { id: "inventory", icon: "▦", label: "库存" }, { id: "products", icon: "◇", label: "商品" }, { id: "turnover", icon: "$", label: "营业额" },
+  const items: { id: Tab; icon: NavIconKind; label: string }[] = [
+    { id: "today", icon: "today", label: "今日" }, { id: "history", icon: "history", label: "历史" }, { id: "inventory", icon: "inventory", label: "库存" }, { id: "products", icon: "products", label: "商品" }, { id: "turnover", icon: "turnover", label: "营业额" },
   ];
-  return <nav className="bottom-nav">{items.map((item) => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => onChange(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav>;
+  return <nav className="bottom-nav">{items.map((item) => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => onChange(item.id)}><NavIcon kind={item.icon} />{item.label}</button>)}</nav>;
 }
 
 function PageHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
   return <header className="page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</header>;
+}
+
+type NavIconKind = "today" | "history" | "inventory" | "products" | "turnover";
+
+function NavIcon({ kind }: { kind: NavIconKind }) {
+  const paths: Record<NavIconKind, ReactNode> = {
+    today: <><path d="M4.5 10.5 12 4l7.5 6.5v9a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z" /><path d="M9.5 21v-6h5v6" /></>,
+    history: <><circle cx="12" cy="12" r="8.5" /><path d="M12 7v5l3.5 2" /></>,
+    inventory: <><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" /><path d="m4.5 7.5 7.5 4.2 7.5-4.2M12 11.7V21" /></>,
+    products: <><path d="M4 5.5h7.5l7.2 7.2-6.7 6.7-7.2-7.2z" /><circle cx="8.2" cy="8.7" r="1.2" /></>,
+    turnover: <><path d="M4 20V12M9.3 20V8M14.7 20V4M20 20V10" /><path d="M3 20.5h18" /></>,
+  };
+  return <span className="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[kind]}</svg></span>;
 }
 
 type MetricIconKind = "revenue" | "profit" | "customers" | "sales";
