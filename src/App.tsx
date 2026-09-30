@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import QRCode from "qrcode";
 import { startAutomaticBackups } from "./backup/automaticBackup";
-import { backupReminderWeekdays, checkBackupReminder, DEFAULT_BACKUP_REMINDER_SETTINGS, loadBackupReminderSettings, recordBackupExport, saveBackupReminderSettings, type BackupReminderDue, type BackupReminderSettings } from "./backup/backupReminder";
 import { repository } from "./db/repository";
 import { SyncService, clearPairingSecretFromLocation, clearPendingPairingSecret, createInviteUrl, pairingSecretFromLocation, pendingPairingSecretFromStorage, rememberPairingSecretForInstall, shouldKeepPairingSecretForInstall, type SyncViewState } from "./sync/syncService";
 import type { AppSnapshot, BackupDocument, CartItem, DailyTurnover, InventoryMovement, LocalBackupRecord, Product, Sale, SaleItem, UnitType } from "./types";
@@ -55,7 +54,6 @@ const downloadBackupFile = async (prefix = "project-one-backup") => {
   anchor.download = `${prefix}-${localDateKey(new Date())}.json`;
   anchor.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-  await recordBackupExport();
 };
 
 type DailySummary = {
@@ -194,7 +192,6 @@ const formatProductSoldQuantity = (product: Product, quantities: Record<UnitType
 function useAppData() {
   const [data, setData] = useState<AppSnapshot | null>(null);
   const [sync, setSync] = useState<SyncViewState>(EMPTY_SYNC);
-  const [backupReminder, setBackupReminder] = useState<BackupReminderDue | null>(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [error, setError] = useState<string>();
   const initialized = useRef(false);
@@ -244,7 +241,6 @@ function useAppData() {
         await refresh();
         if (locationInviteSecret && shouldKeepPairingSecretForInstall()) setShowInstallGuide(true);
         stopAutomaticBackups = startAutomaticBackups();
-        setBackupReminder(await checkBackupReminder());
         await syncService.start(identity.pairing.secret, identity.device);
         if (identity.inviteIgnored) setError("此设备已连接到另一组数据，邀请链接未被应用。");
       } catch (reason) {
@@ -269,11 +265,11 @@ function useAppData() {
     };
   }, [refresh]);
 
-  return { data, sync, error, backupReminder, showInstallGuide, clearBackupReminder: () => setBackupReminder(null), clearError: () => setError(undefined), refresh };
+  return { data, sync, error, showInstallGuide, clearError: () => setError(undefined), refresh };
 }
 
 export function App() {
-  const { data, sync, error, backupReminder, showInstallGuide, clearBackupReminder, clearError } = useAppData();
+  const { data, sync, error, showInstallGuide, clearError } = useAppData();
   const [tab, setTab] = useState<Tab>("today");
   const [notice, setNotice] = useState<Notice>();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -375,7 +371,6 @@ export function App() {
 
       {settingsOpen && <SettingsSheet data={data} sync={sync} onClose={() => setSettingsOpen(false)} onNotice={notify} />}
       {installGuideOpen && <InviteInstallSheet onClose={() => setInstallGuideOpen(false)} />}
-      {backupReminder && <BackupReminderSheet onClose={clearBackupReminder} onNotice={notify} onExport={() => downloadBackupFile("project-one-weekly-backup")} />}
       {categoryEditorOpen && <CategorySheet data={data} onClose={() => setCategoryEditorOpen(false)} onAdd={(input) => mutate(() => repository.createCategory(input), "类别已新增")} onDelete={(id) => mutate(() => repository.deleteCategory(id), "类别已删除")} />}
       {supplierEditorOpen && <SupplierSheet data={data} onClose={() => setSupplierEditorOpen(false)} onAdd={(name) => mutate(() => repository.createSupplier(name), "供应商已新增")} onDelete={(id) => mutate(() => repository.deleteSupplier(id), "供应商已删除")} />}
       {restockHistoryOpen && <RestockHistorySheet data={data} currency={currency} onClose={() => setRestockHistoryOpen(false)} />}
@@ -536,7 +531,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                       <button disabled={products.findIndex((item) => item.id === product.id) === products.length - 1} onClick={() => onMove(product.id, "down")}>↓ 下移</button>
                     </div>
                   ) : (
-                    <div className="quick-actions">
+                    <div className={`quick-actions${productHasBundle(product) ? "" : " single"}`}>
                       {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
                       <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
                     </div>
@@ -1250,23 +1245,6 @@ function CartSheet({ data, currency, onClose, onMutate }: { data: AppSnapshot; c
   return <Sheet title="本单明细" onClose={onClose}><div className="cart-lines">{data.cart.items.map((item) => { const product = data.products.find((entry) => entry.id === item.productId); if (!product) return null; const defaultPrice = item.unitType === "carton" ? product.cartonSalePriceCents : product.packSalePriceCents; const price = item.unitPriceCents ?? defaultPrice; const isEditing = editingItem?.productId === item.productId && editingItem.unitType === item.unitType; return <div className="cart-line" key={`${item.productId}:${item.unitType}`}><div className="cart-line-info"><strong>{product.name}</strong>{isEditing ? <div className="cart-price-editor"><div className="money-input"><span>$</span><input autoFocus aria-label="本单成交价" type="number" inputMode="decimal" min="0" step="0.01" value={draftPrice} onChange={(event) => setDraftPrice(event.target.value)} /></div><button className="cart-price-save" type="button" onClick={() => void savePrice(item)}>确定</button></div> : <span>{productUnitLabel(product, item.unitType)} · {formatMoney(price, currency)} <button className="cart-price-button" type="button" onClick={() => startEditing(item, defaultPrice)}>改价</button></span>}</div><div className="stepper" aria-label={`${product.name}${productUnitLabel(product, item.unitType)}数量`}><button type="button" aria-label={`减少一个${productUnitLabel(product, item.unitType)}`} onClick={() => { triggerTapHaptic(); void onMutate(() => repository.updateCartQuantity(item.productId, item.unitType, item.quantity - 1)); }}>−</button><b aria-live="polite">{item.quantity}</b><button type="button" aria-label={`增加一个${productUnitLabel(product, item.unitType)}`} onClick={() => { triggerTapHaptic(); void onMutate(() => repository.updateCartQuantity(item.productId, item.unitType, item.quantity + 1)); }}>+</button></div></div>; })}<div className="cart-total"><span>{totals.itemCount} 件</span><strong>{formatMoney(totals.revenueCents, currency)}</strong></div><button className="primary-button" onClick={() => void onMutate(() => repository.completeSale(), "本单已完成").then((ok) => ok && onClose())}>完成本单</button><button className="text-danger" onClick={() => window.confirm("清空当前本单吗？") && void onMutate(() => repository.clearCart()).then((ok) => ok && onClose())}>清空本单</button></div></Sheet>;
 }
 
-function BackupReminderSheet({ onClose, onExport, onNotice }: { onClose: () => void; onExport: () => Promise<void>; onNotice: (message: string, kind?: Notice["kind"]) => void }) {
-  const [busy, setBusy] = useState(false);
-  const exportNow = async () => {
-    setBusy(true);
-    try {
-      await onExport();
-      onNotice("备份文件已导出，请在“文件”App 的“下载”中查看");
-      onClose();
-    } catch (reason) {
-      onNotice(reason instanceof Error ? reason.message : "备份导出失败", "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-  return <Sheet title="每周备份提醒" onClose={onClose}><div className="backup-reminder"><div className="backup-reminder-icon">✓</div><h3>请备份本周的销售数据</h3><p>建议把备份文件保存到 iPhone 的“文件”App。自动备份已经保存在本机，也可以稍后再导出。</p><button className="primary-button" disabled={busy} onClick={() => void exportNow()}>导出到文件</button><button className="text-danger" disabled={busy} onClick={onClose}>稍后处理</button></div></Sheet>;
-}
-
 function InviteQrSheet({ secret, onClose, onNotice, onShare }: { secret: string; onClose: () => void; onNotice: (message: string, kind?: Notice["kind"]) => void; onShare: () => Promise<void> }) {
   const inviteUrl = useMemo(() => createInviteUrl(secret), [secret]);
   const [qrDataUrl, setQrDataUrl] = useState<string>();
@@ -1327,7 +1305,6 @@ function SettingsSheet({ data, sync, onClose, onNotice }: { data: AppSnapshot; s
   const fileRef = useRef<HTMLInputElement>(null);
   const [localBackups, setLocalBackups] = useState<LocalBackupRecord[]>([]);
   const [backupBusy, setBackupBusy] = useState(false);
-  const [reminderSettings, setReminderSettings] = useState<BackupReminderSettings>(DEFAULT_BACKUP_REMINDER_SETTINGS);
   const [inviteQrOpen, setInviteQrOpen] = useState(false);
   const refreshLocalBackups = useCallback(async () => {
     setLocalBackups(await repository.listLocalBackups());
@@ -1339,15 +1316,6 @@ function SettingsSheet({ data, sync, onClose, onNotice }: { data: AppSnapshot; s
       unsubscribe();
     };
   }, [refreshLocalBackups]);
-  useEffect(() => {
-    void loadBackupReminderSettings().then(setReminderSettings);
-  }, []);
-  const updateReminderSettings = async (patch: Partial<BackupReminderSettings>) => {
-    const next = { ...reminderSettings, ...patch };
-    setReminderSettings(next);
-    await saveBackupReminderSettings(next);
-    onNotice("备份提醒设置已保存");
-  };
   const createManualBackup = async () => {
     setBackupBusy(true);
     try {
@@ -1405,7 +1373,7 @@ function SettingsSheet({ data, sync, onClose, onNotice }: { data: AppSnapshot; s
   const connectionDetail = data.pendingCount ? `${data.pendingCount} 项等待同步` : sync.lastSyncedAt ? `最后同步 ${formatTime(sync.lastSyncedAt)}` : sync.status === "connecting" ? "首次连接通常需要几秒" : sync.status === "pending" ? "请让另一台手机也保持打开" : "本机数据已安全保存";
   const backupKindLabel = (record: LocalBackupRecord) => record.kind === "daily" ? "每日自动备份" : record.kind === "manual" ? "手动备份" : "恢复前保护备份";
   const latestBackup = localBackups[0];
-  return <><Sheet title="设置" onClose={onClose}><div className="settings-list"><section><h3>设备连接</h3><div className="setting-row"><span><strong>{statusText}</strong><small>{connectionDetail}</small></span><span className={`connection-dot ${sync.status}`} /></div><button className="setting-button" onClick={() => setInviteQrOpen(true)}>显示邀请二维码</button><button className="setting-button" onClick={() => void shareInvite()}>发送邀请链接</button><p className="privacy-note">两台手机需要同时打开 Daily Shop。首次连接可能需要几秒；连接断开后会每秒自动重试，直到恢复。二维码和邀请链接包含私密连接信息，请只发送给可信的人。</p><PeerList data={data} /></section><section><h3>备份</h3><div className="setting-row"><span><strong>每天晚上 8 点后自动备份</strong><small>{latestBackup ? `最近：${new Date(latestBackup.createdAt).toLocaleString("zh-CN")} · 共 ${localBackups.length} 份` : "应用会在 20:00 后首次打开时补做备份"}</small></span><span className="backup-status-dot" /></div><button className="setting-button" disabled={backupBusy} onClick={() => void createManualBackup()}>立即保存一份本机备份</button><button className="setting-button" onClick={() => void downloadBackupFile()}>导出备份到文件</button><button className="setting-button" onClick={() => fileRef.current?.click()}>从文件导入备份</button><input ref={fileRef} className="hidden-input" type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])} /><div className="backup-history">{localBackups.length ? localBackups.map((record) => <div className="backup-history-row" key={record.id}><span><strong>{backupKindLabel(record)}</strong><small>{new Date(record.createdAt).toLocaleString("zh-CN")}</small></span><button type="button" disabled={backupBusy} onClick={() => void restoreLocalBackup(record)}>恢复</button></div>) : <p className="backup-empty">还没有自动备份。每天 20:00 后打开应用就会生成第一份。</p>}</div><p className="privacy-note">自动备份保存在本机浏览器存储，不会上传网络；清除 Safari 网站数据或卸载应用后，本机备份也会消失，重要时请导出到“文件”。</p></section><section><h3>备份提醒</h3><label className="reminder-control"><span><strong>提醒频率</strong><small>默认每周一次，在下次打开应用时提醒</small></span><select value={reminderSettings.frequency} onChange={(event) => void updateReminderSettings({ frequency: event.target.value as BackupReminderSettings["frequency"] })}><option value="weekly">每周一次</option><option value="daily">每天一次</option><option value="off">关闭提醒</option></select></label>{reminderSettings.frequency === "weekly" && <label className="reminder-control"><span><strong>提醒星期</strong><small>默认周日下午</small></span><select value={reminderSettings.weekday} onChange={(event) => void updateReminderSettings({ weekday: Number(event.target.value) })}>{backupReminderWeekdays.map((weekday, index) => <option value={index} key={weekday}>{weekday}</option>)}</select></label>}<label className="reminder-control"><span><strong>提醒时间</strong><small>默认 12:00 以后</small></span><input type="time" value={reminderSettings.time} onChange={(event) => void updateReminderSettings({ time: event.target.value })} /></label><p className="privacy-note">这是应用内提醒，不是 iPhone 锁屏通知；如果应用关闭，会在设定时间之后下一次打开时显示一次。</p></section><section><h3>本机信息</h3><DeviceNameInput value={data.device.label} onSave={(label) => void (async () => { await repository.updateDeviceLabel(label); await syncService.updateDeviceLabel(label); })()} /><div className="setting-row"><span><strong>设备 ID</strong><small>{data.device.deviceId.slice(0, 8)}</small></span></div><p className="privacy-note">每笔销售会保留本机名称，用来标记是谁在这台设备上记账。</p>{data.conflictCount > 0 && <p className="privacy-note">已自动处理 {data.conflictCount} 次同时修改冲突。</p>}</section><section className="danger-section"><h3>数据操作</h3><div className="data-action-buttons"><button className="setting-button" disabled={backupBusy} onClick={() => void exportManualBackup()}>备份</button><button className="setting-button danger" disabled={backupBusy} onClick={() => void resetBusinessData()}>数据重置</button></div><p className="privacy-note">重置前请先点击“备份”，确认后本机业务数据会被清空。</p></section></div></Sheet>{inviteQrOpen && <InviteQrSheet secret={data.pairing.secret} onClose={() => setInviteQrOpen(false)} onNotice={onNotice} onShare={shareInvite} />}</>;
+  return <><Sheet title="设置" onClose={onClose}><div className="settings-list"><section><h3>设备连接</h3><div className="setting-row"><span><strong>{statusText}</strong><small>{connectionDetail}</small></span><span className={`connection-dot ${sync.status}`} /></div><button className="setting-button" onClick={() => setInviteQrOpen(true)}>显示邀请二维码</button><button className="setting-button" onClick={() => void shareInvite()}>发送邀请链接</button><p className="privacy-note">两台手机需要同时打开 Daily Shop。首次连接可能需要几秒；连接断开后会每秒自动重试，直到恢复。二维码和邀请链接包含私密连接信息，请只发送给可信的人。</p><PeerList data={data} /></section><section><h3>备份</h3><div className="setting-row"><span><strong>每天晚上 8 点后自动备份</strong><small>{latestBackup ? `最近：${new Date(latestBackup.createdAt).toLocaleString("zh-CN")} · 共 ${localBackups.length} 份` : "应用会在 20:00 后首次打开时补做备份"}</small></span><span className="backup-status-dot" /></div><button className="setting-button" disabled={backupBusy} onClick={() => void createManualBackup()}>立即保存一份本机备份</button><button className="setting-button" onClick={() => void downloadBackupFile()}>导出备份到文件</button><button className="setting-button" onClick={() => fileRef.current?.click()}>从文件导入备份</button><input ref={fileRef} className="hidden-input" type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])} /><div className="backup-history">{localBackups.length ? localBackups.map((record) => <div className="backup-history-row" key={record.id}><span><strong>{backupKindLabel(record)}</strong><small>{new Date(record.createdAt).toLocaleString("zh-CN")}</small></span><button type="button" disabled={backupBusy} onClick={() => void restoreLocalBackup(record)}>恢复</button></div>) : <p className="backup-empty">还没有自动备份。每天 20:00 后打开应用就会生成第一份。</p>}</div><p className="privacy-note">自动备份保存在本机浏览器存储，不会上传网络；清除 Safari 网站数据或卸载应用后，本机备份也会消失，重要时请导出到“文件”。</p></section><section><h3>本机信息</h3><DeviceNameInput value={data.device.label} onSave={(label) => void (async () => { await repository.updateDeviceLabel(label); await syncService.updateDeviceLabel(label); })()} /><div className="setting-row"><span><strong>设备 ID</strong><small>{data.device.deviceId.slice(0, 8)}</small></span></div><p className="privacy-note">每笔销售会保留本机名称，用来标记是谁在这台设备上记账。</p>{data.conflictCount > 0 && <p className="privacy-note">已自动处理 {data.conflictCount} 次同时修改冲突。</p>}</section><section className="danger-section"><h3>数据操作</h3><div className="data-action-buttons"><button className="setting-button" disabled={backupBusy} onClick={() => void exportManualBackup()}>备份</button><button className="setting-button danger" disabled={backupBusy} onClick={() => void resetBusinessData()}>数据重置</button></div><p className="privacy-note">重置前请先点击“备份”，确认后本机业务数据会被清空。</p></section></div></Sheet>{inviteQrOpen && <InviteQrSheet secret={data.pairing.secret} onClose={() => setInviteQrOpen(false)} onNotice={onNotice} onShare={shareInvite} />}</>;
 }
 
 function DeviceNameInput({ value, onSave }: { value: string; onSave: (value: string) => void }) {
