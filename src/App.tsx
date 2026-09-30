@@ -530,7 +530,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                 <button key={category.id} className={categoryId === category.id ? "active" : ""} onClick={() => setCategoryId(category.id)}>{category.name}</button>
               ))}
             </div>
-            <button className="sort-toggle" onClick={() => { if (!sorting) setCategoryId("all"); setSorting((value) => !value); }}><span className="sort-icon" aria-hidden="true">↕</span>{sorting ? "完成" : "编辑排序"}</button>
+            <button className="sort-toggle" onClick={() => { if (!sorting) setCategoryId("all"); setSorting((value) => !value); }}>{sorting ? "完成" : "编辑排序"}</button>
           </div>
         )}
         {products.length ? (
