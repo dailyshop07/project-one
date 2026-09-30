@@ -75,10 +75,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .sales-metric { text-align: center; }
 .sales-metric-values { min-width: 0; align-self: center; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 2px; transform: translateY(4px); }
 .sales-metric-item { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 2px; line-height: 1; }
-.sales-metric-item:nth-child(3), .sales-metric-item:nth-child(4) { transform: translateY(10px); }
-.sales-metric-item strong { color: var(--green-dark); font-size: clamp(11px, 3.6vw, 18px); letter-spacing: -.055em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sales-metric-item:nth-child(3), .sales-metric-item:nth-child(4) { transform: translateY(0); }
+.sales-metric-item strong { color: #000; font-size: clamp(12.1px, 3.96vw, 19.8px); letter-spacing: -.055em; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sales-metric-item-long strong { font-size: clamp(8px, 2.4vw, 15px); letter-spacing: -.08em; }
-.sales-metric-item em { color: #000; font-size: clamp(8px, 2.5vw, 11px); font-style: normal; font-weight: 750; white-space: nowrap; }
+.sales-metric-item em { color: #000; font-size: clamp(8.8px, 2.75vw, 12.1px); font-style: normal; font-weight: 750; white-space: nowrap; }
 
 @media (max-width: 430px) {
   .metric { height: 108px; grid-template-rows: 28px minmax(0, 1fr) 18px; padding-top: 8px; padding-bottom: 7px; }
@@ -606,8 +606,8 @@ body { color: var(--ink); }
 .metric-period-compare strong { color: var(--green); font-size: 9px; letter-spacing: -.025em; }
 .sales-metric-values { width: 100%; height: 100%; grid-template-rows: repeat(2, minmax(0, 1fr)); align-items: center; justify-items: center; gap: 4px 1px; }
 .sales-metric-item { width: 100%; gap: 1.6px; justify-content: center; }
-.sales-metric-item strong { color: var(--green-dark); font-size: 11.2px; letter-spacing: -.045em; }
-.sales-metric-item em { color: #000; font-size: 7.2px; }
+.sales-metric-item strong { color: #000; font-size: 12.32px; letter-spacing: -.045em; }
+.sales-metric-item em { color: #000; font-size: 7.92px; }
 
 .today-page .quick-card { margin-top: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .category-toolbar { gap: 7px; margin: 0 0 10px; }
@@ -652,7 +652,7 @@ body { color: var(--ink); }
   .metric-value-medium { font-size: 16px; }
   .metric-value-long { font-size: 12px; letter-spacing: -.07em; }
   .metric-value-customer { font-size: 15.2px; }
-  .sales-metric-item strong { font-size: 10.4px; }
+  .sales-metric-item strong { font-size: 11.44px; }
   .category-tabs button { padding-left: 12px; padding-right: 12px; }
   .category-toolbar .sort-toggle { padding-left: 9px; padding-right: 9px; }
   .today-page .quick-product { grid-template-columns: minmax(0, 1fr) minmax(170px, 55.2%); gap: 6px; padding-left: 9px; }
