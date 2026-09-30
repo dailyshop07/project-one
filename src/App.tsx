@@ -3,10 +3,10 @@ import QRCode from "qrcode";
 import { startAutomaticBackups } from "./backup/automaticBackup";
 import { backupReminderWeekdays, checkBackupReminder, DEFAULT_BACKUP_REMINDER_SETTINGS, loadBackupReminderSettings, recordBackupExport, saveBackupReminderSettings, type BackupReminderDue, type BackupReminderSettings } from "./backup/backupReminder";
 import { repository } from "./db/repository";
-import { SyncService, clearPairingSecretFromLocation, clearPendingPairingSecret, createInviteUrl, pairingSecretFromLocation, pairingSecretFromText, pendingPairingSecretFromStorage, rememberPairingSecretForInstall, shouldKeepPairingSecretForInstall, type SyncViewState } from "./sync/syncService";
+import { SyncService, clearPairingSecretFromLocation, clearPendingPairingSecret, createInviteUrl, pairingSecretFromLocation, pendingPairingSecretFromStorage, rememberPairingSecretForInstall, shouldKeepPairingSecretForInstall, type SyncViewState } from "./sync/syncService";
 import type { AppSnapshot, BackupDocument, CartItem, DailyTurnover, InventoryMovement, LocalBackupRecord, Product, Sale, SaleItem, UnitType } from "./types";
 import { activeSales, categoryName, formatDateHeading, formatMoney, formatProductStock, formatTime, localDateKey, productBaseUnitLabel, productBundleUnitLabel, productHasBundle, productUnitLabel, saleSummary, stockMap, thresholdCartons } from "./utils/format";
-import { displayCostCentsAtAverage, inventoryCostStates, inventoryValueCentsAtAverage } from "./utils/cost";
+import { averageCostCentsForProduct, displayCostCentsAtAverage, inventoryCostStates, inventoryValueCentsAtAverage } from "./utils/cost";
 
 type Tab = "today" | "history" | "inventory" | "products" | "turnover";
 type TurnoverField = "cash" | "pos" | "lotteryPayout";
@@ -46,15 +46,6 @@ const weightFromNameInput = (value: string) => {
   return Number.isFinite(number) ? Math.max(1, Math.round(number * (/kg|公斤/i.test(match[2]) ? 1000 : 1))) : undefined;
 };
 const triggerTapHaptic = () => undefined;
-const isEmptyBusinessSnapshot = (snapshot: AppSnapshot) =>
-  snapshot.products.length === 0 &&
-  snapshot.suppliers.length === 0 &&
-  snapshot.sales.length === 0 &&
-  snapshot.saleItems.length === 0 &&
-  snapshot.inventoryMovements.length === 0 &&
-  snapshot.dailyTurnovers.length === 0 &&
-  snapshot.cart.items.length === 0;
-
 const downloadBackupFile = async (prefix = "project-one-backup") => {
   const backup = await repository.exportBackup();
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
@@ -79,7 +70,21 @@ type DailySummary = {
 
 type BreakdownMetric = "quantity" | "revenue" | "profit";
 type BreakdownRequest = { metric: BreakdownMetric; unitLabel?: string };
-type BreakdownRow = { name: string; value: number; unitLabel?: string };
+type BreakdownRow = { name: string; value: number; unitLabel?: string; quantityByUnit: Record<string, number> };
+
+const saleItemDisplayQuantity = (item: SaleItem, product?: Product) => {
+  const isTobacco = product?.categoryKind === "tobacco";
+  return {
+    unitLabel: isTobacco ? "克" : item.unitLabelSnapshot ?? (item.unitType === "carton" ? "条" : "包"),
+    quantity: isTobacco ? item.unitsInPacks * item.quantity : item.quantity,
+  };
+};
+
+const formatQuantitySummary = (quantityByUnit: Record<string, number>) =>
+  Object.entries(quantityByUnit)
+    .filter(([, quantity]) => quantity > 0)
+    .map(([unitLabel, quantity]) => `${quantity.toLocaleString("zh-CN")}${unitLabel}`)
+    .join(" · ");
 
 const summarizeSales = (sales: Sale[], saleItems: SaleItem[], products: Product[] = []): DailySummary => {
   const saleIds = new Set(sales.map((sale) => sale.id));
@@ -112,19 +117,17 @@ const buildBreakdownRows = (items: SaleItem[], products: Product[], request: Bre
   const rows = new Map<string, BreakdownRow>();
   items.forEach((item) => {
     const product = products.find((entry) => entry.id === item.productId);
-    const isTobacco = product?.categoryKind === "tobacco";
+    const displayQuantity = saleItemDisplayQuantity(item, product);
+    const current = rows.get(item.productId) ?? { name: item.productNameSnapshot, value: 0, quantityByUnit: {} };
+    current.quantityByUnit[displayQuantity.unitLabel] = (current.quantityByUnit[displayQuantity.unitLabel] ?? 0) + displayQuantity.quantity;
     if (request.metric === "quantity") {
-      const unitLabel = isTobacco ? "克" : item.unitLabelSnapshot ?? (item.unitType === "carton" ? "条" : "包");
-      if (unitLabel !== request.unitLabel) return;
-      const value = isTobacco ? item.unitsInPacks * item.quantity : item.quantity;
-      const current = rows.get(item.productId) ?? { name: item.productNameSnapshot, value: 0, unitLabel };
-      current.value += value;
+      if (displayQuantity.unitLabel !== request.unitLabel) return;
+      current.value += displayQuantity.quantity;
+      current.unitLabel = displayQuantity.unitLabel;
       rows.set(item.productId, current);
       return;
     }
-    const value = request.metric === "revenue" ? item.lineRevenueCents : item.lineProfitCents;
-    const current = rows.get(item.productId) ?? { name: item.productNameSnapshot, value: 0 };
-    current.value += value;
+    current.value += request.metric === "revenue" ? item.lineRevenueCents : item.lineProfitCents;
     rows.set(item.productId, current);
   });
   return Array.from(rows.values()).sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
@@ -161,12 +164,36 @@ const compareMetric = (current: number, previous: number): MetricComparison => {
   return { value: `${change > 0 ? "+" : ""}${change}%`, arrow: change > 0 ? "↑" : "↓", tone: change > 0 ? "up" : "down" };
 };
 
+type HourlyCustomerRow = { startHour: number; endHour: number; customers: number };
+
+const buildHourlyCustomerRows = (sales: Sale[], asOf: Date): HourlyCustomerRow[] => {
+  const businessStartHour = 6;
+  const businessEndHour = 19;
+  const endHour = asOf.getHours() < businessStartHour
+    ? businessStartHour
+    : Math.min(businessEndHour, asOf.getHours() + 1);
+  const counts = new Map<number, number>();
+  sales.forEach((sale) => {
+    const hour = new Date(sale.completedAt).getHours();
+    counts.set(hour, (counts.get(hour) ?? 0) + 1);
+  });
+  return Array.from({ length: Math.max(0, endHour - businessStartHour) }, (_, index) => {
+    const startHour = businessStartHour + index;
+    return { startHour, endHour: startHour + 1, customers: counts.get(startHour) ?? 0 };
+  });
+};
+
+const quickAddCostCents = (product: Product, unitType: UnitType, costStates: ReturnType<typeof inventoryCostStates>) => {
+  const baseCost = averageCostCentsForProduct(product, costStates);
+  if (product.categoryKind === "tobacco") return baseCost * Math.max(1, product.unitWeightGrams ?? 1);
+  return unitType === "carton" ? baseCost * Math.max(1, product.packsPerCarton) : baseCost;
+};
+
 function useAppData() {
   const [data, setData] = useState<AppSnapshot | null>(null);
   const [sync, setSync] = useState<SyncViewState>(EMPTY_SYNC);
   const [backupReminder, setBackupReminder] = useState<BackupReminderDue | null>(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
-  const [showPairingRecovery, setShowPairingRecovery] = useState(false);
   const [error, setError] = useState<string>();
   const initialized = useRef(false);
 
@@ -212,11 +239,8 @@ function useAppData() {
         if (invitedSecret && !shouldKeepPairingSecretForInstall()) clearPendingPairingSecret();
         if (!shouldKeepPairingSecretForInstall()) clearPairingSecretFromLocation();
         if (!active) return;
-        const snapshot = await refresh();
+        await refresh();
         if (locationInviteSecret && shouldKeepPairingSecretForInstall()) setShowInstallGuide(true);
-        if (!shouldKeepPairingSecretForInstall() && !invitedSecret && snapshot && isEmptyBusinessSnapshot(snapshot)) {
-          setShowPairingRecovery(true);
-        }
         stopAutomaticBackups = startAutomaticBackups();
         setBackupReminder(await checkBackupReminder());
         await syncService.start(identity.pairing.secret, identity.device);
@@ -243,11 +267,11 @@ function useAppData() {
     };
   }, [refresh]);
 
-  return { data, sync, error, backupReminder, showInstallGuide, showPairingRecovery, clearBackupReminder: () => setBackupReminder(null), clearError: () => setError(undefined), refresh };
+  return { data, sync, error, backupReminder, showInstallGuide, clearBackupReminder: () => setBackupReminder(null), clearError: () => setError(undefined), refresh };
 }
 
 export function App() {
-  const { data, sync, error, backupReminder, showInstallGuide, showPairingRecovery, clearBackupReminder, clearError } = useAppData();
+  const { data, sync, error, backupReminder, showInstallGuide, clearBackupReminder, clearError } = useAppData();
   const [tab, setTab] = useState<Tab>("today");
   const [notice, setNotice] = useState<Notice>();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -264,15 +288,10 @@ export function App() {
   const [turnoverDate, setTurnoverDate] = useState<string | null>(null);
   const [turnoverField, setTurnoverField] = useState<TurnoverField>("cash");
   const [installGuideOpen, setInstallGuideOpen] = useState(false);
-  const [pairingRecoveryOpen, setPairingRecoveryOpen] = useState(false);
 
   useEffect(() => {
     if (showInstallGuide) setInstallGuideOpen(true);
   }, [showInstallGuide]);
-
-  useEffect(() => {
-    if (showPairingRecovery) setPairingRecoveryOpen(true);
-  }, [showPairingRecovery]);
 
   const notify = (message: string, kind: Notice["kind"] = "success") => {
     setNotice({ message, kind });
@@ -355,7 +374,6 @@ export function App() {
 
       {settingsOpen && <SettingsSheet data={data} sync={sync} onClose={() => setSettingsOpen(false)} onNotice={notify} />}
       {installGuideOpen && <InviteInstallSheet onClose={() => setInstallGuideOpen(false)} />}
-      {pairingRecoveryOpen && <PairingInputSheet onClose={() => setPairingRecoveryOpen(false)} onNotice={notify} />}
       {backupReminder && <BackupReminderSheet onClose={clearBackupReminder} onNotice={notify} onExport={() => downloadBackupFile("project-one-weekly-backup")} />}
       {categoryEditorOpen && <CategorySheet data={data} onClose={() => setCategoryEditorOpen(false)} onAdd={(input) => mutate(() => repository.createCategory(input), "类别已新增")} onDelete={(id) => mutate(() => repository.deleteCategory(id), "类别已删除")} />}
       {supplierEditorOpen && <SupplierSheet data={data} onClose={() => setSupplierEditorOpen(false)} onAdd={(name) => mutate(() => repository.createSupplier(name), "供应商已新增")} onDelete={(id) => mutate(() => repository.deleteSupplier(id), "供应商已删除")} />}
@@ -421,18 +439,25 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
   const [sorting, setSorting] = useState(false);
   const [breakdownRequest, setBreakdownRequest] = useState<BreakdownRequest | null>(null);
   const [salesHistoryOpen, setSalesHistoryOpen] = useState(false);
+  const [customerHoursOpen, setCustomerHoursOpen] = useState(false);
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     const timer = window.setInterval(() => setClock(new Date()), 60000);
     return () => window.clearInterval(timer);
   }, []);
-  const today = new Date();
+  const today = new Date(clock);
   const todayKey = localDateKey(today);
-  const sales = activeSales(data.sales).filter((sale) => localDateKey(new Date(sale.completedAt)) === todayKey).sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+  const sales = activeSales(data.sales).filter((sale) => {
+    const completedAt = new Date(sale.completedAt);
+    return localDateKey(completedAt) === todayKey && completedAt.getTime() <= today.getTime();
+  }).sort((a, b) => b.completedAt.localeCompare(a.completedAt));
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayKey = localDateKey(yesterday);
-  const yesterdaySales = activeSales(data.sales).filter((sale) => localDateKey(new Date(sale.completedAt)) === yesterdayKey);
+  const yesterdaySales = activeSales(data.sales).filter((sale) => {
+    const completedAt = new Date(sale.completedAt);
+    return localDateKey(completedAt) === yesterdayKey && completedAt.getTime() <= yesterday.getTime();
+  });
   const metrics = summarizeSales(sales, data.saleItems, data.products);
   const yesterdayMetrics = summarizeSales(yesterdaySales, data.saleItems, data.products);
   const unitTotals = Object.entries(metrics.unitTotals).sort(([left], [right]) => {
@@ -486,7 +511,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
       <section className="metric-grid" aria-label="今日数据">
         <Metric label="销售额" value={formatMoney(metrics.revenue, currency)} comparison={compareMetric(metrics.revenue, yesterdayMetrics.revenue)} onClick={() => setBreakdownRequest({ metric: "revenue" })} />
         <Metric label="毛利" value={formatMoney(metrics.profit, currency)} comparison={compareMetric(metrics.profit, yesterdayMetrics.profit)} onClick={() => setBreakdownRequest({ metric: "profit" })} />
-        <Metric label="客户数" value={String(metrics.customers)} comparison={compareMetric(metrics.customers, yesterdayMetrics.customers)} />
+        <Metric label="客户数" value={String(metrics.customers)} comparison={compareMetric(metrics.customers, yesterdayMetrics.customers)} onClick={() => setCustomerHoursOpen(true)} />
       </section>
 
       <section className="card quick-card">
@@ -511,7 +536,6 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                     <h3>{product.name}</h3>
                     <div>{productHasBundle(product) ? <><span>{productBaseUnitLabel(product)} {formatMoney(product.packSalePriceCents, currency)}</span><span>{productBundleUnitLabel(product)} {formatMoney(product.cartonSalePriceCents, currency)}</span></> : <span>{productBaseUnitLabel(product)} {formatMoney(product.packSalePriceCents, currency)}</span>}</div>
                   </div>
-                  <p className="cost-line">当前平均成本/{product.categoryKind === "tobacco" ? "公斤" : productHasBundle(product) ? productBundleUnitLabel(product) : productBaseUnitLabel(product)} {formatMoney(displayCostCentsAtAverage(product, costStates), currency)}</p>
                   {sorting ? (
                     <div className="sort-actions">
                       <button disabled={products.findIndex((item) => item.id === product.id) === 0} onClick={() => onMove(product.id, "up")}>↑ 上移</button>
@@ -519,8 +543,8 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                     </div>
                   ) : (
                     <div className="quick-actions">
-                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
-                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
+                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} costCents={quickAddCostCents(product, "carton", costStates)} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
+                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} costCents={quickAddCostCents(product, "pack", costStates)} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
                     </div>
                   )}
                 </article>
@@ -540,6 +564,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
       </section>
       {salesHistoryOpen && <DailySalesHistorySheet data={data} onClose={() => setSalesHistoryOpen(false)} />}
       {breakdownRequest && <BreakdownSheet request={breakdownRequest} rows={breakdownRows} total={breakdownTotal} currency={currency} onClose={() => setBreakdownRequest(null)} />}
+      {customerHoursOpen && <CustomerHoursSheet sales={sales} asOf={today} onClose={() => setCustomerHoursOpen(false)} />}
     </>
   );
 }
@@ -567,13 +592,36 @@ function BreakdownSheet({ request, rows, total, currency, onClose }: { request: 
             const valueLabel = isQuantity ? `${row.value.toLocaleString("zh-CN")}${request.unitLabel ?? ""}` : formatMoney(row.value, currency);
             return (
               <div className="breakdown-row" key={`${row.name}-${index}`}>
-                <div className="breakdown-row-main"><span className="breakdown-rank">{index + 1}</span><strong>{row.name}</strong><b>{valueLabel}</b></div>
+                <div className="breakdown-row-main"><span className="breakdown-rank">{index + 1}</span><div className="breakdown-name"><strong>{row.name}</strong><small>销量 {formatQuantitySummary(row.quantityByUnit) || "—"}</small></div><b>{valueLabel}</b></div>
                 <div className="breakdown-row-foot"><span>{total > 0 ? `占比 ${(share * 100).toFixed(1)}%` : "占比 —"}</span><div className="breakdown-share"><i style={{ width: `${Math.min(100, Math.max(0, share * 100))}%` }} /></div></div>
               </div>
             );
           })}
         </div>
       ) : <p className="empty-inline">今天还没有可统计的数据。</p>}
+    </Sheet>
+  );
+}
+
+function CustomerHoursSheet({ sales, asOf, onClose }: { sales: Sale[]; asOf: Date; onClose: () => void }) {
+  const rows = buildHourlyCustomerRows(sales, asOf);
+  const total = sales.length;
+  return (
+    <Sheet title="到店客户数" onClose={onClose}>
+      <div className="customer-hours-summary">
+        <div><span>今日到店客户</span><strong>{total} 人</strong></div>
+        <small>按小时累计 · 截止 {formatTime(asOf.toISOString())}</small>
+      </div>
+      {rows.length ? (
+        <div className="customer-hours-list">
+          {rows.map((row) => (
+            <div className="customer-hours-row" key={row.startHour}>
+              <span>{String(row.startHour).padStart(2, "0")}:00–{String(row.endHour).padStart(2, "0")}:00</span>
+              <strong>{row.customers} 人</strong>
+            </div>
+          ))}
+        </div>
+      ) : <p className="empty-inline">营业时间从 06:00 开始，当前还没有可统计的时段。</p>}
     </Sheet>
   );
 }
@@ -772,14 +820,17 @@ function AnalysisView({ data, currency }: { data: AppSnapshot; currency: string 
     return { key, label: `${date.getMonth() + 1}/${date.getDate()}`, value: sales.filter((sale) => localDateKey(new Date(sale.completedAt)) === key).reduce((sum, sale) => sum + sale.revenueCents, 0) };
   });
   const maxTrend = Math.max(1, ...trend.map((point) => point.value));
+  const productsById = new Map(data.products.map((product) => [product.id, product]));
   const ranks = Array.from(items.reduce((map, item) => {
-    const current = map.get(item.productId) ?? { name: item.productNameSnapshot, unitLabel: item.unitLabelSnapshot ?? (item.unitType === "carton" ? "条" : "包"), quantity: 0, revenue: 0, profit: 0 };
-    current.quantity += item.unitsInPacks * item.quantity;
+    const displayQuantity = saleItemDisplayQuantity(item, productsById.get(item.productId));
+    const current = map.get(item.productId) ?? { name: item.productNameSnapshot, quantity: 0, quantityByUnit: {}, revenue: 0, profit: 0 };
+    current.quantity += displayQuantity.quantity;
+    current.quantityByUnit[displayQuantity.unitLabel] = (current.quantityByUnit[displayQuantity.unitLabel] ?? 0) + displayQuantity.quantity;
     current.revenue += item.lineRevenueCents;
     current.profit += item.lineProfitCents;
     map.set(item.productId, current);
     return map;
-  }, new Map<string, { name: string; unitLabel: string; quantity: number; revenue: number; profit: number }>()).values()).sort((a, b) => b[ranking] - a[ranking]).slice(0, 5);
+  }, new Map<string, { name: string; quantity: number; quantityByUnit: Record<string, number>; revenue: number; profit: number }>()).values()).sort((a, b) => b[ranking] - a[ranking]).slice(0, 5);
 
   return (
     <div className="analysis-stack">
@@ -803,7 +854,7 @@ function AnalysisView({ data, currency }: { data: AppSnapshot; currency: string 
       </section>
       <section className="card ranking-card">
         <div className="section-title-row"><h2>畅销商品</h2><select value={ranking} onChange={(e) => setRanking(e.target.value as typeof ranking)}><option value="quantity">按销量</option><option value="revenue">按销售额</option><option value="profit">按毛利</option></select></div>
-        {ranks.length ? ranks.map((item, index) => <div className="rank-row" key={item.name}><span>{index + 1}</span><strong>{item.name}</strong><em>{ranking === "quantity" ? `${item.quantity} ${item.unitLabel}` : formatMoney(item[ranking], currency)}</em></div>) : <p className="empty-inline">所选时段还没有数据。</p>}
+        {ranks.length ? ranks.map((item, index) => <div className="rank-row" key={item.name}><span>{index + 1}</span><div className="rank-row-main"><strong>{item.name}</strong><small>销量 {formatQuantitySummary(item.quantityByUnit) || "—"}</small></div><em>{ranking === "quantity" ? item.quantity.toLocaleString("zh-CN") : formatMoney(item[ranking], currency)}</em></div>) : <p className="empty-inline">所选时段还没有数据。</p>}
       </section>
     </div>
   );
@@ -882,9 +933,9 @@ function Metric({ label, value, comparison, onClick }: { label: string; value: s
     <>
       <div className="metric-head">
         <span>{label}</span>
-        {comparison && <div className={`metric-compare ${comparison.tone}`}><small>昨日同期</small><strong>{comparison.value} {comparison.arrow}</strong></div>}
       </div>
       <strong className={`metric-value${value.length > 16 ? " metric-value-compact metric-value-extra-compact" : value.length > 10 ? " metric-value-compact" : ""}`}>{value}</strong>
+      {comparison && <div className={`metric-period-compare ${comparison.tone}`}><span>以昨日同期相比</span><strong>{comparison.value} {comparison.arrow}</strong></div>}
     </>
   );
   return onClick ? <button type="button" className="metric metric-button" onClick={onClick}>{content}</button> : <div className="metric">{content}</div>;
@@ -899,9 +950,9 @@ function SaleRow({ sale, items, currency, onClick }: { sale: Sale; items: SaleIt
   return <button className="sale-row" onClick={onClick}><time>{formatTime(sale.completedAt)}</time><div><strong>{saleSummary(items) || "交易记录"}</strong><span>毛利 {formatMoney(sale.profitCents, currency)} · 销售：{sale.deviceLabelSnapshot ?? "本机"}</span></div><b>{formatMoney(sale.revenueCents, currency)}</b></button>;
 }
 
-function QuickAddButton({ label, ariaLabel, count, onAdd }: { label: string; ariaLabel: string; count: number; onAdd: () => void }) {
+function QuickAddButton({ label, costCents, currency, ariaLabel, count, onAdd }: { label: string; costCents: number; currency: string; ariaLabel: string; count: number; onAdd: () => void }) {
   const badge = count > 0 ? <span className="quick-add-badge" aria-hidden="true">{count}</span> : null;
-  return <button type="button" onClick={onAdd} aria-label={ariaLabel}>{label}{badge}</button>;
+  return <button type="button" onClick={onAdd} aria-label={`${ariaLabel}，成本 ${formatMoney(costCents, currency)}`}><span className="quick-add-label">{label}</span><small>成本 {formatMoney(costCents, currency)}</small>{badge}</button>;
 }
 
 function EmptyState({ title, body, action, onAction }: { title: string; body: string; action?: string; onAction?: () => void }) {
@@ -1224,52 +1275,21 @@ function InviteQrSheet({ secret, onClose, onNotice, onShare }: { secret: string;
 }
 
 const installGuideSteps = [
-  { title: "扫码后保持邀请页面打开", body: "不要返回主页，也不要另开普通网址。必须在这个带有邀请链接的页面上继续安装。", art: "scan", action: "下一步" },
-  { title: "点 Safari 的分享按钮", body: "在底部工具栏找到分享图标，打开系统分享菜单。", art: "share", action: "下一步" },
-  { title: "选择“添加到主屏幕”", body: "在分享菜单里点“添加到主屏幕”，确认添加。安装时会把当前邀请链接交给主屏幕 App。", art: "add", action: "下一步" },
-  { title: "从新图标打开 Daily Shop", body: "点主屏幕上的 Daily Shop 图标，两台手机同时打开后会自动连接。", art: "open", action: "完成" },
+  { title: "扫码后停留在邀请页面", body: "不要返回主页，也不要另开普通网址。保持这个带有邀请链接的 Safari 页面打开。", image: "/install-guide/scan-invite.png", alt: "手持 iPhone 显示邀请页面的真实操作图", action: "下一步" },
+  { title: "点击 Safari 的分享按钮", body: "在屏幕底部工具栏点方框向上的分享图标，打开系统分享菜单。", image: "/install-guide/share-safari.png", alt: "iPhone Safari 底部分享按钮被黄色圈出", action: "下一步" },
+  { title: "选择“添加到主屏幕”", body: "在分享菜单中找到“添加到主屏幕”，点进去并确认添加。", image: "/install-guide/add-to-home-screen.png", alt: "iPhone 分享菜单中的 Add to Home Screen 被黄色圈出", action: "下一步" },
+  { title: "从主屏幕打开 Daily Shop", body: "回到 iPhone 主屏幕，点击新出现的 Daily Shop 图标，两台手机保持打开后会自动连接。", image: "/install-guide/open-daily-shop.png", alt: "iPhone 主屏幕上的 Daily Shop 图标被黄色圈出", action: "完成" },
 ] as const;
 
-function InstallGuideArt({ type }: { type: (typeof installGuideSteps)[number]["art"] }) {
-  return <div className={`install-guide-art install-guide-art-${type}`} aria-hidden="true"><div className="install-guide-phone"><div className="install-guide-phone-top" /><div className="install-guide-phone-screen"><span className="install-guide-screen-title">Daily Shop</span>{type === "scan" && <><span className="install-guide-qr">▦</span><span className="install-guide-screen-caption">邀请已收到</span></>}{type === "share" && <><span className="install-guide-share-icon">↑</span><span className="install-guide-screen-caption">分享</span></>}{type === "add" && <><span className="install-guide-menu-line">添加到主屏幕</span><span className="install-guide-menu-line muted">复制链接</span><span className="install-guide-menu-line muted">打印</span></>}{type === "open" && <><span className="install-guide-app-icon">P1</span><span className="install-guide-screen-caption">Daily Shop</span></>}</div><div className="install-guide-phone-bottom" /></div>{type === "scan" && <div className="install-guide-bubble">✓</div>}{type === "share" && <div className="install-guide-arrow">↘</div>}{type === "add" && <div className="install-guide-home-badge">＋</div>}{type === "open" && <div className="install-guide-tap">点这里打开</div>}</div>;
+function InstallGuideArt({ image, alt }: { image: string; alt: string }) {
+  return <div className="install-guide-art"><img src={image} alt={alt} /></div>;
 }
 
 function InviteInstallSheet({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState(0);
   const current = installGuideSteps[step];
   const next = () => step === installGuideSteps.length - 1 ? onClose() : setStep((value) => value + 1);
-  return <Sheet title="安装并保持连接" onClose={onClose}><div className="invite-install-sheet"><div className="invite-install-progress" aria-label={`第 ${step + 1} 步，共 ${installGuideSteps.length} 步`}>{installGuideSteps.map((item, index) => <button type="button" key={item.art} className={index === step ? "active" : ""} aria-label={`第 ${index + 1} 步`} onClick={() => setStep(index)} />)}</div><InstallGuideArt type={current.art} /><div className="invite-install-copy"><span>第 {step + 1} 步 / {installGuideSteps.length}</span><h3>{current.title}</h3><p>{current.body}</p></div><button className="primary-button" type="button" onClick={next}>{current.action}</button>{step > 0 && <button className="text-button" type="button" onClick={() => setStep((value) => value - 1)}>上一步</button>}<button className="secondary-button" type="button" onClick={onClose}>暂时继续使用 Safari</button></div></Sheet>;
-}
-
-function PairingInputSheet({ onClose, onNotice }: { onClose: () => void; onNotice: (message: string, kind?: Notice["kind"]) => void }) {
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const paste = async () => {
-    try {
-      setValue(await navigator.clipboard.readText());
-    } catch {
-      onNotice("无法读取剪贴板，请长按输入框粘贴", "error");
-    }
-  };
-  const reconnect = async () => {
-    const secret = pairingSecretFromText(value);
-    if (!secret) {
-      onNotice("邀请链接无效，请粘贴完整链接", "error");
-      return;
-    }
-    if (!window.confirm("重新连接后，这台手机会加入邀请人的数据组。确定继续吗？")) return;
-    setBusy(true);
-    try {
-      await repository.replacePairingSecret(secret);
-      syncService.stop();
-      onNotice("连接信息已更新，正在重新打开");
-      window.setTimeout(() => location.reload(), 400);
-    } catch (reason) {
-      setBusy(false);
-      onNotice(reason instanceof Error ? reason.message : "重新连接失败", "error");
-    }
-  };
-  return <Sheet title="完成主屏幕配对" onClose={onClose}><div className="pairing-input-sheet"><p>主屏幕 App 和 Safari 使用不同的本机存储。如果刚从邀请页面安装后没有自动连接，请从主手机复制完整邀请链接，在这里粘贴一次。</p><textarea value={value} onChange={(event) => setValue(event.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="粘贴完整邀请链接" /><button className="secondary-button" type="button" onClick={() => void paste()}>从剪贴板粘贴</button><button className="primary-button" type="button" disabled={busy || !value.trim()} onClick={() => void reconnect()}>{busy ? "正在重新连接…" : "重新连接"}</button></div></Sheet>;
+  return <Sheet title="安装并保持连接" onClose={onClose}><div className="invite-install-sheet"><div className="invite-install-progress" aria-label={`第 ${step + 1} 步，共 ${installGuideSteps.length} 步`}>{installGuideSteps.map((item, index) => <button type="button" key={item.image} className={index === step ? "active" : ""} aria-label={`第 ${index + 1} 步`} onClick={() => setStep(index)} />)}</div><InstallGuideArt image={current.image} alt={current.alt} /><div className="invite-install-copy"><span>第 {step + 1} 步 / {installGuideSteps.length}</span><h3>{current.title}</h3><p>{current.body}</p></div><button className="primary-button" type="button" onClick={next}>{current.action}</button>{step > 0 && <button className="text-button" type="button" onClick={() => setStep((value) => value - 1)}>上一步</button>}<button className="secondary-button" type="button" onClick={onClose}>暂时继续使用 Safari</button></div></Sheet>;
 }
 
 function PeerList({ data }: { data: AppSnapshot }) {
@@ -1283,7 +1303,6 @@ function SettingsSheet({ data, sync, onClose, onNotice }: { data: AppSnapshot; s
   const [backupBusy, setBackupBusy] = useState(false);
   const [reminderSettings, setReminderSettings] = useState<BackupReminderSettings>(DEFAULT_BACKUP_REMINDER_SETTINGS);
   const [inviteQrOpen, setInviteQrOpen] = useState(false);
-  const [pairingInputOpen, setPairingInputOpen] = useState(false);
   const refreshLocalBackups = useCallback(async () => {
     setLocalBackups(await repository.listLocalBackups());
   }, []);
@@ -1360,7 +1379,7 @@ function SettingsSheet({ data, sync, onClose, onNotice }: { data: AppSnapshot; s
   const connectionDetail = data.pendingCount ? `${data.pendingCount} 项等待同步` : sync.lastSyncedAt ? `最后同步 ${formatTime(sync.lastSyncedAt)}` : sync.status === "connecting" ? "首次连接通常需要几秒" : sync.status === "pending" ? "请让另一台手机也保持打开" : "本机数据已安全保存";
   const backupKindLabel = (record: LocalBackupRecord) => record.kind === "daily" ? "每日自动备份" : record.kind === "manual" ? "手动备份" : "恢复前保护备份";
   const latestBackup = localBackups[0];
-  return <><Sheet title="设置" onClose={onClose}><div className="settings-list"><section><h3>设备连接</h3><div className="setting-row"><span><strong>{statusText}</strong><small>{connectionDetail}</small></span><span className={`connection-dot ${sync.status}`} /></div><button className="setting-button" onClick={() => setInviteQrOpen(true)}>显示邀请二维码</button><button className="setting-button" onClick={() => void shareInvite()}>发送邀请链接</button><button className="setting-button" onClick={() => setPairingInputOpen(true)}>粘贴邀请链接重新连接</button><p className="privacy-note">两台手机需要同时打开 Daily Shop。首次连接可能需要几秒；连接断开后会每秒自动重试，直到恢复。二维码和邀请链接包含私密连接信息，请只发送给可信的人。</p><PeerList data={data} /></section><section><h3>备份</h3><div className="setting-row"><span><strong>每天晚上 8 点后自动备份</strong><small>{latestBackup ? `最近：${new Date(latestBackup.createdAt).toLocaleString("zh-CN")} · 共 ${localBackups.length} 份` : "应用会在 20:00 后首次打开时补做备份"}</small></span><span className="backup-status-dot" /></div><button className="setting-button" disabled={backupBusy} onClick={() => void createManualBackup()}>立即保存一份本机备份</button><button className="setting-button" onClick={() => void downloadBackupFile()}>导出备份到文件</button><button className="setting-button" onClick={() => fileRef.current?.click()}>从文件导入备份</button><input ref={fileRef} className="hidden-input" type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])} /><div className="backup-history">{localBackups.length ? localBackups.map((record) => <div className="backup-history-row" key={record.id}><span><strong>{backupKindLabel(record)}</strong><small>{new Date(record.createdAt).toLocaleString("zh-CN")}</small></span><button type="button" disabled={backupBusy} onClick={() => void restoreLocalBackup(record)}>恢复</button></div>) : <p className="backup-empty">还没有自动备份。每天 20:00 后打开应用就会生成第一份。</p>}</div><p className="privacy-note">自动备份保存在本机浏览器存储，不会上传网络；清除 Safari 网站数据或卸载应用后，本机备份也会消失，重要时请导出到“文件”。</p></section><section><h3>备份提醒</h3><label className="reminder-control"><span><strong>提醒频率</strong><small>默认每周一次，在下次打开应用时提醒</small></span><select value={reminderSettings.frequency} onChange={(event) => void updateReminderSettings({ frequency: event.target.value as BackupReminderSettings["frequency"] })}><option value="weekly">每周一次</option><option value="daily">每天一次</option><option value="off">关闭提醒</option></select></label>{reminderSettings.frequency === "weekly" && <label className="reminder-control"><span><strong>提醒星期</strong><small>默认周日下午</small></span><select value={reminderSettings.weekday} onChange={(event) => void updateReminderSettings({ weekday: Number(event.target.value) })}>{backupReminderWeekdays.map((weekday, index) => <option value={index} key={weekday}>{weekday}</option>)}</select></label>}<label className="reminder-control"><span><strong>提醒时间</strong><small>默认 12:00 以后</small></span><input type="time" value={reminderSettings.time} onChange={(event) => void updateReminderSettings({ time: event.target.value })} /></label><p className="privacy-note">这是应用内提醒，不是 iPhone 锁屏通知；如果应用关闭，会在设定时间之后下一次打开时显示一次。</p></section><section><h3>本机信息</h3><DeviceNameInput value={data.device.label} onSave={(label) => void (async () => { await repository.updateDeviceLabel(label); await syncService.updateDeviceLabel(label); })()} /><div className="setting-row"><span><strong>设备 ID</strong><small>{data.device.deviceId.slice(0, 8)}</small></span></div><p className="privacy-note">每笔销售会保留本机名称，用来标记是谁在这台设备上记账。</p>{data.conflictCount > 0 && <p className="privacy-note">已自动处理 {data.conflictCount} 次同时修改冲突。</p>}</section><section className="danger-section"><h3>数据操作</h3><div className="data-action-buttons"><button className="setting-button" disabled={backupBusy} onClick={() => void exportManualBackup()}>备份</button><button className="setting-button danger" disabled={backupBusy} onClick={() => void resetBusinessData()}>数据重置</button></div><p className="privacy-note">重置前请先点击“备份”，确认后本机业务数据会被清空。</p></section></div></Sheet>{inviteQrOpen && <InviteQrSheet secret={data.pairing.secret} onClose={() => setInviteQrOpen(false)} onNotice={onNotice} onShare={shareInvite} />}{pairingInputOpen && <PairingInputSheet onClose={() => setPairingInputOpen(false)} onNotice={onNotice} />}</>;
+  return <><Sheet title="设置" onClose={onClose}><div className="settings-list"><section><h3>设备连接</h3><div className="setting-row"><span><strong>{statusText}</strong><small>{connectionDetail}</small></span><span className={`connection-dot ${sync.status}`} /></div><button className="setting-button" onClick={() => setInviteQrOpen(true)}>显示邀请二维码</button><button className="setting-button" onClick={() => void shareInvite()}>发送邀请链接</button><p className="privacy-note">两台手机需要同时打开 Daily Shop。首次连接可能需要几秒；连接断开后会每秒自动重试，直到恢复。二维码和邀请链接包含私密连接信息，请只发送给可信的人。</p><PeerList data={data} /></section><section><h3>备份</h3><div className="setting-row"><span><strong>每天晚上 8 点后自动备份</strong><small>{latestBackup ? `最近：${new Date(latestBackup.createdAt).toLocaleString("zh-CN")} · 共 ${localBackups.length} 份` : "应用会在 20:00 后首次打开时补做备份"}</small></span><span className="backup-status-dot" /></div><button className="setting-button" disabled={backupBusy} onClick={() => void createManualBackup()}>立即保存一份本机备份</button><button className="setting-button" onClick={() => void downloadBackupFile()}>导出备份到文件</button><button className="setting-button" onClick={() => fileRef.current?.click()}>从文件导入备份</button><input ref={fileRef} className="hidden-input" type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])} /><div className="backup-history">{localBackups.length ? localBackups.map((record) => <div className="backup-history-row" key={record.id}><span><strong>{backupKindLabel(record)}</strong><small>{new Date(record.createdAt).toLocaleString("zh-CN")}</small></span><button type="button" disabled={backupBusy} onClick={() => void restoreLocalBackup(record)}>恢复</button></div>) : <p className="backup-empty">还没有自动备份。每天 20:00 后打开应用就会生成第一份。</p>}</div><p className="privacy-note">自动备份保存在本机浏览器存储，不会上传网络；清除 Safari 网站数据或卸载应用后，本机备份也会消失，重要时请导出到“文件”。</p></section><section><h3>备份提醒</h3><label className="reminder-control"><span><strong>提醒频率</strong><small>默认每周一次，在下次打开应用时提醒</small></span><select value={reminderSettings.frequency} onChange={(event) => void updateReminderSettings({ frequency: event.target.value as BackupReminderSettings["frequency"] })}><option value="weekly">每周一次</option><option value="daily">每天一次</option><option value="off">关闭提醒</option></select></label>{reminderSettings.frequency === "weekly" && <label className="reminder-control"><span><strong>提醒星期</strong><small>默认周日下午</small></span><select value={reminderSettings.weekday} onChange={(event) => void updateReminderSettings({ weekday: Number(event.target.value) })}>{backupReminderWeekdays.map((weekday, index) => <option value={index} key={weekday}>{weekday}</option>)}</select></label>}<label className="reminder-control"><span><strong>提醒时间</strong><small>默认 12:00 以后</small></span><input type="time" value={reminderSettings.time} onChange={(event) => void updateReminderSettings({ time: event.target.value })} /></label><p className="privacy-note">这是应用内提醒，不是 iPhone 锁屏通知；如果应用关闭，会在设定时间之后下一次打开时显示一次。</p></section><section><h3>本机信息</h3><DeviceNameInput value={data.device.label} onSave={(label) => void (async () => { await repository.updateDeviceLabel(label); await syncService.updateDeviceLabel(label); })()} /><div className="setting-row"><span><strong>设备 ID</strong><small>{data.device.deviceId.slice(0, 8)}</small></span></div><p className="privacy-note">每笔销售会保留本机名称，用来标记是谁在这台设备上记账。</p>{data.conflictCount > 0 && <p className="privacy-note">已自动处理 {data.conflictCount} 次同时修改冲突。</p>}</section><section className="danger-section"><h3>数据操作</h3><div className="data-action-buttons"><button className="setting-button" disabled={backupBusy} onClick={() => void exportManualBackup()}>备份</button><button className="setting-button danger" disabled={backupBusy} onClick={() => void resetBusinessData()}>数据重置</button></div><p className="privacy-note">重置前请先点击“备份”，确认后本机业务数据会被清空。</p></section></div></Sheet>{inviteQrOpen && <InviteQrSheet secret={data.pairing.secret} onClose={() => setInviteQrOpen(false)} onNotice={onNotice} onShare={shareInvite} />}</>;
 }
 
 function DeviceNameInput({ value, onSave }: { value: string; onSave: (value: string) => void }) {
