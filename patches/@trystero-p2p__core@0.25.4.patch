@@ -1,0 +1,45 @@
+diff --git a/dist/peer.mjs b/dist/peer.mjs
+index 9eaad9dc23f6138e98f98b501e59c002fc3821c5..6413dcaab17271c111b095f32149aa265512ab05 100644
+--- a/dist/peer.mjs
++++ b/dist/peer.mjs	
+@@ -266,7 +266,9 @@ var peer_default = (initiator, { trickleIce, rtcConfig, rtcPolyfill, turnConfig,
+ 				handlers.error?.(toError(err, "failed to apply remote signal"));
+ 			}
+ 		},
+-		sendData: (data) => dataChannel?.send(data),
++		sendData: (data) => {
++			if (dataChannel?.readyState === "open") dataChannel.send(data);
++		},
+ 		destroy: () => {
+ 			clearDisconnectedCloseTimer();
+ 			dataChannel?.close();
+diff --git a/dist/room.mjs b/dist/room.mjs
+index a09d8b9c6425b41e08fe4cf421a974d94d627a6c..e7466522fc18368e80f85ed8ed9c8e09e6104153 100644
+--- a/dist/room.mjs
++++ b/dist/room.mjs	
+@@ -68,14 +68,17 @@ var room_default = (onPeer, onPeerLeave, onSelfLeave, { onPeerHandshake, onHands
+ 		onPeerLeave(id);
+ 	};
+ 	const leave = async () => {
+-		await leaveAction.send("");
+-		await new Promise((res) => setTimeout(res, 99));
+-		entries(peerMap).forEach(([id, peer]) => {
+-			peer.destroy();
+-			clearPeerState(id, mkErr("room left"));
+-		});
+-		unregisterBeforeUnloadCleanup();
+-		onSelfLeave();
++		try {
++			await leaveAction.send("");
++			await new Promise((res) => setTimeout(res, 99));
++		} finally {
++			entries(peerMap).forEach(([id, peer]) => {
++				peer.destroy();
++				clearPeerState(id, mkErr("room left"));
++			});
++			unregisterBeforeUnloadCleanup();
++			onSelfLeave();
++		}
+ 	};
+ 	const pingAction = makeActionInternal(internalNs("ping"));
+ 	const pongAction = makeActionInternal(internalNs("pong"));
