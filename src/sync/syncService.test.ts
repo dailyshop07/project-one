@@ -177,4 +177,26 @@ describe("foreground WebRTC recovery", () => {
     expect(service.room).toBe(secondRoom);
     service.stop();
   });
+
+  it("does not tear down the startup room when focus fires during initial join", async () => {
+    const room = fakeRoom();
+    joinRoom.mockReturnValue(room);
+    const service = new SyncService(repository as never) as any;
+    service.stopped = false;
+    service.secret = "e".repeat(40);
+    service.device = { deviceId: "device-e", label: "Phone E" };
+    service.iceServers = [];
+    service.iceServersLoadedAt = Date.now();
+
+    const startup = service.runReconnectFlow("startup");
+    await Promise.resolve();
+    const foreground = service.resumeConnection();
+    await vi.advanceTimersByTimeAsync(6_500);
+    await Promise.all([startup, foreground]);
+
+    expect(joinRoom).toHaveBeenCalledTimes(1);
+    expect(room.terminate).not.toHaveBeenCalled();
+    expect(service.room).toBe(room);
+    service.stop();
+  });
 });

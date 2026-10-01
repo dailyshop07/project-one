@@ -761,6 +761,14 @@ export class SyncService {
       const activeFlow = this.reconnectPromise;
       if (activeFlow) {
         await activeFlow;
+        // Startup and resume signals can arrive while the initial join is
+        // still waiting for IndexedDB, TURN credentials, or the relay. The
+        // active flow has already created the fresh room; tearing it down here
+        // makes both phones repeatedly miss each other's first announcement.
+        // Only start another generation if the active flow failed before it
+        // could leave a subscribed room (for example, offline or invalid
+        // credentials).
+        if (this.room && !forceFresh) return;
       }
       if (this.stopped || !navigator.onLine) return;
       if (!forceFresh && await this.checkExistingPeer()) {
