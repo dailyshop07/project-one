@@ -317,6 +317,13 @@ export function App() {
     }
   };
 
+  const revealProductAfterFirstCartAdd = (productId: string) => {
+    window.requestAnimationFrame(() => {
+      const card = Array.from(document.querySelectorAll<HTMLElement>(".today-page .quick-product")).find((element) => element.dataset.productId === productId);
+      card?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    });
+  };
+
   const openTurnoverEditor = (date: string, field: TurnoverField = "cash") => {
     setTurnoverField(field);
     setTurnoverDate(date);
@@ -345,7 +352,12 @@ export function App() {
             sync={sync}
             currency={currency}
           onSettings={() => setSettingsOpen(true)}
-          onAdd={(id, unit) => void mutate(() => repository.addToCart(id, unit))}
+          onAdd={(id, unit, revealLastProduct) => {
+            const shouldReveal = revealLastProduct && tab === "today";
+            void mutate(() => repository.addToCart(id, unit)).then((ok) => {
+              if (ok && shouldReveal) revealProductAfterFirstCartAdd(id);
+            });
+          }}
           onMove={(id, direction) => void mutate(() => repository.moveProduct(id, direction))}
           onAddProduct={() => { setTab("products"); setProductEditor("new"); }}
           />
@@ -435,7 +447,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
   sync: SyncViewState;
   currency: string;
   onSettings: () => void;
-  onAdd: (id: string, unit: UnitType) => void;
+  onAdd: (id: string, unit: UnitType, revealLastProduct: boolean) => void;
   onMove: (id: string, direction: "up" | "down") => void;
   onAddProduct: () => void;
 }) {
@@ -528,7 +540,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
         )}
         {products.length ? (
           <div className="product-grid">
-            {products.map((product) => {
+            {products.map((product, productIndex) => {
               const cartQuantity = cartQuantities.get(product.id) ?? { pack: 0, carton: 0 };
               const profitFor = (unitType: UnitType) => {
                 const unitsInPacks = unitType === "carton" ? product.packsPerCarton : product.categoryKind === "tobacco" ? product.unitWeightGrams ?? 1 : 1;
@@ -536,7 +548,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                 return salePriceCents - averageCostCentsForProduct(product, costStates) * unitsInPacks;
               };
               return (
-                <article className="quick-product" key={product.id}>
+                <article className="quick-product" data-product-id={product.id} key={product.id}>
                   <div className="product-card-info">
                     <h3>{product.name}</h3>
                     <span className="product-card-sold">{formatProductSoldQuantity(product, todayProductQuantities.get(product.id) ?? { pack: 0, carton: 0 })}</span>
@@ -548,8 +560,8 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                     </div>
                   ) : (
                     <div className={`quick-actions${productHasBundle(product) ? "" : " single"}`}>
-                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} profitCents={profitFor("carton")} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
-                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} profitCents={profitFor("pack")} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
+                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} profitCents={profitFor("carton")} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton", productIndex === products.length - 1)} />}
+                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} profitCents={profitFor("pack")} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack", productIndex === products.length - 1)} />
                     </div>
                   )}
                 </article>
