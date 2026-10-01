@@ -221,7 +221,7 @@ function useAppData() {
       // current tab lives only in this React instance, so this must not
       // navigate or remount the app.
       void refresh();
-      void syncService.handleOnline();
+      void syncService.resumeConnection();
     };
     const onVisible = () => document.visibilityState === "visible" ? onResume() : syncService.handleHidden();
     const onHidden = () => syncService.handleHidden();
