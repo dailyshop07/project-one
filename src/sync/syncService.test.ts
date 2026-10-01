@@ -4,6 +4,12 @@ const joinRoom = vi.fn();
 
 vi.mock("trystero", () => ({ joinRoom }));
 
+vi.mock("../db/identity", () => ({
+  randomId: vi.fn(() => "test-id"),
+  roomIdFromSecret: vi.fn(async () => "test-room"),
+  validPairingSecret: vi.fn(() => true),
+}));
+
 type FakeAction = {
   send: ReturnType<typeof vi.fn>;
   onMessage: ((data: unknown, context: { peerId: string }) => void | Promise<void>) | null;
