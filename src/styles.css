@@ -590,6 +590,8 @@ html, body, .app-shell { background: var(--canvas); }
 body { color: var(--ink); }
 .page-content { padding-left: 15px; padding-right: 15px; padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom) + 16px); }
 .page-content.today-page { padding-top: calc(env(safe-area-inset-top) + 7px); padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom) + 16px); }
+/* Leave enough scroll room for the last product card above the cart dock. */
+.page-content.today-page.has-cart { padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom) + 94px); }
 
 .today-header { min-height: 48px; gap: 8px; }
 .today-header .today-date { margin: 0; color: #718079; font-size: 15px; font-weight: 550; letter-spacing: .015em; white-space: nowrap; }
