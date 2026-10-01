@@ -513,17 +513,22 @@ export class SyncService {
         appId: "project-one-p2p-v1",
         password: secret,
         ...(iceServers?.length ? { rtcConfig: { iceServers } } : {}),
-        // Keep signaling focused on the relays that accept this app's encrypted events.
-        // The package defaults currently include public relays that reject writes,
-        // which creates noisy retries before the phones can see each other.
+        // Keep a healthy, diverse relay set for iOS foreground recovery.  Passing
+        // relayConfig.urls replaces Trystero's defaults, so every URL here must be
+        // reachable; a dead custom relay can otherwise leave a phone without a
+        // shared subscription even while the app is visibly online.
         relayConfig: {
           urls: [
+            "wss://bucket.coracle.social",
             "wss://nos.lol",
-            "wss://relay.nostrdice.com",
+            "wss://nostr-01.uid.ovh",
+            "wss://nostr-01.yakihonne.com",
+            "wss://nostr-relay.corb.net",
+            "wss://nostr.data.haus",
+            "wss://nostr.islandarea.net",
             "wss://nostr.sathoarder.com",
-            "wss://nostr.tegila.com.br",
-            "wss://relay.agorist.space",
-            "wss://nostr.vulpem.com",
+            "wss://purplerelay.com",
+            "wss://basspistol.org",
           ],
         },
       },
@@ -701,10 +706,16 @@ export class SyncService {
       } catch (error) {
         this.log("fresh join failed", error);
       }
-      // Keep this one fresh room subscribed. Trystero announces at 233, 533
-      // and 1333ms during startup; replacing the room every 2.5 seconds makes
-      // two phones that foreground at slightly different times miss each
-      // other and can trigger the Nostr strategy's 60-second backoff.
+      // A room with no peer is not a successful recovery.  Trystero's steady
+      // Nostr announce interval is one minute, so keeping this room forever
+      // can leave a foreground phone waiting for that next announce.  Retry
+      // only after the full discovery window has elapsed; this keeps each
+      // room stable long enough for the warmup announces to be delivered.
+      this.schedulePeerReconnect();
+      // Keep this fresh room subscribed until the controlled retry fires.
+      // Trystero announces at 233, 533 and 1333ms during startup; replacing
+      // the room every few seconds would make phones miss each other and can
+      // trigger the Nostr strategy's 60-second steady-announce interval.
       this.connectionState = this.room ? "connecting" : "disconnected";
       this.setState({ status: navigator.onLine ? "pending" : "offline", peerCount: 0 });
     })();
