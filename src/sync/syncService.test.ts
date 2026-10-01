@@ -1,15 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const joinRoom = vi.fn();
-const getRelaySockets = vi.fn<() => Record<string, FakeWebSocket>>(() => ({}));
-const pauseRelayReconnection = vi.fn();
-const resumeRelayReconnection = vi.fn();
 
-vi.mock("trystero", () => ({
-  getRelaySockets,
-  joinRoom,
-  pauseRelayReconnection,
-  resumeRelayReconnection,
+vi.mock("./trysteroFrameRoom", () => ({
+  createTrysteroFrameRoom: joinRoom,
 }));
 
 vi.mock("../db/identity", () => ({
@@ -23,28 +17,6 @@ type FakeAction = {
   onMessage: ((data: unknown, context: { peerId: string }) => void | Promise<void>) | null;
 };
 
-class FakeWebSocket {
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static readonly CLOSING = 2;
-  static readonly CLOSED = 3;
-
-  readyState = FakeWebSocket.OPEN;
-  close = vi.fn(() => {
-    this.readyState = FakeWebSocket.CLOSED;
-    this.closeListeners.splice(0).forEach((listener) => listener());
-  });
-  private closeListeners: Array<() => void> = [];
-
-  addEventListener(type: string, listener: () => void) {
-    if (type === "close") this.closeListeners.push(listener);
-  }
-
-  open() {
-    this.readyState = FakeWebSocket.OPEN;
-  }
-}
-
 function fakeRoom(peers: Record<string, { close: ReturnType<typeof vi.fn> }> = {}) {
   const actions = new Map<string, FakeAction>();
   return {
@@ -52,6 +24,7 @@ function fakeRoom(peers: Record<string, { close: ReturnType<typeof vi.fn> }> = {
     getPeers: vi.fn(() => peers),
     ping: vi.fn<(peerId: string) => Promise<number>>(),
     leave: vi.fn(async () => undefined),
+    terminate: vi.fn(() => Object.keys(peers).forEach((peerId) => delete peers[peerId])),
     makeAction: vi.fn((namespace: string) => {
       let action = actions.get(namespace);
       if (!action) {
@@ -81,7 +54,6 @@ let SyncService: typeof import("./syncService").SyncService;
 
 beforeAll(async () => {
   vi.stubGlobal("RTCPeerConnection", class {});
-  vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.stubGlobal("window", globalThis);
   vi.stubGlobal("document", { visibilityState: "visible" });
   vi.stubGlobal("navigator", { onLine: true });
@@ -93,7 +65,6 @@ afterAll(() => vi.unstubAllGlobals());
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
-  getRelaySockets.mockReturnValue({});
 });
 
 describe("foreground WebRTC recovery", () => {
@@ -108,17 +79,16 @@ describe("foreground WebRTC recovery", () => {
     service.room = room;
     service.actions = { sendSyncControl: vi.fn(async () => []) };
     service.connectionGeneration = 1;
-    service.handleHidden();
 
     await Promise.all([service.resumeConnection(), service.resumeConnection(), service.handleOnline()]);
 
     expect(room.ping).toHaveBeenCalledTimes(1);
-    expect(room.leave).not.toHaveBeenCalled();
+    expect(room.terminate).not.toHaveBeenCalled();
     expect(joinRoom).not.toHaveBeenCalled();
     service.stop();
   });
 
-  it("closes and leaves a stale room before making one fresh join", async () => {
+  it("terminates the background transport realm before making one fresh join", async () => {
     const stalePeer = { close: vi.fn() };
     const stalePeers = { stale: stalePeer };
     stalePeer.close.mockImplementation(() => window.setTimeout(() => {
@@ -126,13 +96,6 @@ describe("foreground WebRTC recovery", () => {
     }, 100));
     const staleRoom = fakeRoom(stalePeers);
     staleRoom.ping.mockImplementation(() => new Promise(() => undefined));
-    const relays = { one: new FakeWebSocket(), two: new FakeWebSocket() };
-    getRelaySockets.mockReturnValue(relays);
-    let relayResumeCount = 0;
-    resumeRelayReconnection.mockImplementation(() => {
-      relayResumeCount += 1;
-      if (relayResumeCount > 1) window.setTimeout(() => Object.values(relays).forEach((socket) => socket.open()), 200);
-    });
     const freshPeer = { close: vi.fn() };
     const freshPeers: Record<string, { close: ReturnType<typeof vi.fn> }> = {};
     const freshRoom = fakeRoom(freshPeers);
@@ -152,26 +115,19 @@ describe("foreground WebRTC recovery", () => {
     service.connectionGeneration = 1;
     service.handleHidden();
 
+    expect(staleRoom.terminate).toHaveBeenCalledTimes(1);
     const resume = service.resumeConnection();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(joinRoom).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(1);
     await resume;
 
-    expect(stalePeer.close).toHaveBeenCalledTimes(1);
-    expect(staleRoom.leave).toHaveBeenCalledTimes(1);
-    expect(relays.one.close).toHaveBeenCalledTimes(1);
-    expect(relays.two.close).toHaveBeenCalledTimes(1);
+    expect(staleRoom.terminate).toHaveBeenCalledTimes(1);
     expect(joinRoom).toHaveBeenCalledTimes(1);
     expect(service.room).toBe(freshRoom);
     service.stop();
   });
 
-  it("keeps one fresh room stable for the full discovery window", async () => {
+  it("starts a new discovery generation in under ten seconds when no peer appears", async () => {
     const room = fakeRoom();
-    const relays = { one: new FakeWebSocket(), two: new FakeWebSocket() };
-    getRelaySockets.mockReturnValue(relays);
-    resumeRelayReconnection.mockImplementation(() => Object.values(relays).forEach((socket) => socket.open()));
     joinRoom.mockReturnValue(room);
     const service = new SyncService(repository as never) as any;
     service.stopped = false;
@@ -180,32 +136,45 @@ describe("foreground WebRTC recovery", () => {
     service.handleHidden();
 
     const resume = service.resumeConnection();
-    await vi.advanceTimersByTimeAsync(8_000);
+    await vi.advanceTimersByTimeAsync(6_500);
     await resume;
-
     expect(joinRoom).toHaveBeenCalledTimes(1);
-    expect(room.leave).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(joinRoom).toHaveBeenCalledTimes(2);
+    expect(room.terminate).toHaveBeenCalledTimes(1);
     expect(service.room).toBe(room);
     service.stop();
   });
 
-  it("retries discovery after a full no-peer window instead of waiting for the 60s announce", async () => {
+  it("restarts immediately when foregrounding interrupts an in-flight discovery", async () => {
     const firstRoom = fakeRoom();
-    const secondRoom = fakeRoom();
-    joinRoom.mockReturnValueOnce(firstRoom).mockReturnValueOnce(secondRoom);
+    const secondPeers: Record<string, { close: ReturnType<typeof vi.fn> }> = {};
+    const secondRoom = fakeRoom(secondPeers);
+    joinRoom
+      .mockReturnValueOnce(firstRoom)
+      .mockImplementationOnce(() => {
+        queueMicrotask(() => {
+          secondPeers.peer = { close: vi.fn() };
+          secondRoom.onPeerJoin?.("peer");
+        });
+        return secondRoom;
+      });
     const service = new SyncService(repository as never) as any;
     service.stopped = false;
     service.secret = "d".repeat(40);
     service.device = { deviceId: "device-d", label: "Phone D" };
+
+    const startup = service.runReconnectFlow("startup");
+    await vi.advanceTimersByTimeAsync(1);
     service.handleHidden();
+    const resume = service.resumeConnection();
+    await vi.advanceTimersByTimeAsync(10);
+    await Promise.all([startup, resume]);
 
-    const firstResume = service.resumeConnection();
-    await vi.advanceTimersByTimeAsync(8_000);
-    await firstResume;
-    expect(joinRoom).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(8_000);
+    expect(firstRoom.terminate).toHaveBeenCalledTimes(1);
     expect(joinRoom).toHaveBeenCalledTimes(2);
+    expect(service.room).toBe(secondRoom);
     service.stop();
   });
 });
