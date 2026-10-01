@@ -1,9 +1,14 @@
-import { joinRoom, type Room } from "trystero";
+import {
+  getRelaySockets,
+  joinRoom,
+  pauseRelayReconnection,
+  resumeRelayReconnection,
+  type Room,
+} from "trystero";
 import type { DeviceRecord, SyncOperation } from "../types";
 import type { Repository } from "../db/repository";
 import { randomId, roomIdFromSecret, validPairingSecret } from "../db/identity";
 import { fetchTurnIceServers } from "./turnCredentials";
-import { KeepPristineOfferPeerConnection } from "./rtcPolyfill";
 
 export type SyncStatus = "local" | "offline" | "connecting" | "connected" | "syncing" | "pending" | "error";
 
@@ -14,9 +19,12 @@ const snapshotBatchSize = 50;
 const pendingConnectionNoticeMs = 3_000;
 const foregroundEventDebounceMs = 1_000;
 const healthCheckTimeoutMs = 1_000;
-const connectionWatchdogMs = 2_500;
-const reconnectCleanupDelayMs = 200;
-const maximumReconnectAttempts = 3;
+const connectionDiscoveryWindowMs = 8_000;
+const peerReconnectGraceMs = 8_000;
+const relayCloseGraceMs = 300;
+const relayOpenTimeoutMs = 4_000;
+const relayPollIntervalMs = 50;
+const minimumReadyRelays = 2;
 const blockedPeerSettingKey = "sync.blocked-peer-ids.v1";
 const disconnectedPeerSettingKey = "sync.disconnected-peer-ids.v1";
 
@@ -95,8 +103,6 @@ export class SyncService {
   private actionCleanups: Array<() => void> = [];
   private currentPeers = new Set<string>();
   private connectionState: ConnectionState = "disconnected";
-  private isConnecting = false;
-  private reconnectAttempt = 0;
   private connectionGeneration = 0;
   private lastBackgroundAt?: number;
   private lastForegroundAt = 0;
@@ -209,14 +215,63 @@ export class SyncService {
     return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
   }
 
+  private async waitUntil(predicate: () => boolean, timeoutMs: number, intervalMs = 20) {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate() && Date.now() < deadline) await this.delay(intervalMs);
+    return predicate();
+  }
+
+  private relaySockets() {
+    return Object.values(getRelaySockets?.() ?? {}) as WebSocket[];
+  }
+
+  private async refreshRelaySockets() {
+    // iOS can resume with WebSockets that still report OPEN even though the
+    // underlying network path died in the background. An announce written to
+    // one of those sockets is lost and Trystero's Nostr strategy then waits
+    // 60 seconds before its next steady announcement. Pause automatic retry,
+    // close every old socket, then release all reconnects together.
+    pauseRelayReconnection();
+    let oldSockets: WebSocket[] = [];
+    try {
+      oldSockets = this.relaySockets();
+      const closing = oldSockets.map((socket) => new Promise<void>((resolve) => {
+        if (socket.readyState >= WebSocket.CLOSING) return resolve();
+        const finish = () => resolve();
+        socket.addEventListener("close", finish, { once: true });
+        try {
+          socket.close();
+        } catch {
+          resolve();
+        }
+      }));
+      if (closing.length) {
+        await Promise.race([
+          Promise.allSettled(closing).then(() => undefined),
+          this.delay(relayCloseGraceMs),
+        ]);
+      }
+    } finally {
+      resumeRelayReconnection();
+    }
+
+    if (!oldSockets.length) return;
+    await this.waitUntil(() => {
+      const sockets = this.relaySockets();
+      const target = Math.min(minimumReadyRelays, sockets.length);
+      return target > 0 && sockets.filter((socket) => socket.readyState === WebSocket.OPEN).length >= target;
+    }, relayOpenTimeoutMs, relayPollIntervalMs);
+    this.log(`${this.relaySockets().filter((socket) => socket.readyState === WebSocket.OPEN).length} relay sockets ready`);
+  }
+
   private schedulePeerReconnect() {
     if (this.peerReconnectTimer !== undefined || this.stopped || !navigator.onLine || document.visibilityState === "hidden") return;
     this.peerReconnectTimer = window.setTimeout(() => {
       this.peerReconnectTimer = undefined;
       if (!this.currentPeers.size && document.visibilityState !== "hidden") {
-        void this.runReconnectFlow("peer left");
+        void this.runReconnectFlow("peer left", true);
       }
-    }, reconnectCleanupDelayMs);
+    }, peerReconnectGraceMs);
   }
 
   private clearDeliveryTimer() {
@@ -403,6 +458,14 @@ export class SyncService {
         // The browser may already have disposed a stale iOS connection.
       }
     }
+    // RTCPeerConnection.close() reaches Trystero's internal close handler on
+    // the next task. Calling room.leave() before that handler has removed the
+    // peer can make the leave action send through a closed data channel. When
+    // leave rejects, Trystero keeps the room cached and the next joinRoom()
+    // simply returns that stale room. Wait briefly for the internal peer map
+    // to empty before leaving, and retry leave once if Safari delivers the
+    // close event late.
+    await this.waitUntil(() => Object.keys(room.getPeers?.() ?? {}).length === 0, relayCloseGraceMs);
     this.currentPeers.clear();
     this.peerDevices.clear();
     this.flushing.clear();
@@ -413,7 +476,12 @@ export class SyncService {
     try {
       await room.leave?.();
     } catch {
-      // Explicit peer close already detached the transport; leave is best effort.
+      await this.delay(100);
+      try {
+        await room.leave?.();
+      } catch {
+        // A later recovery signal will retry after Safari finishes closing.
+      }
     }
   }
 
@@ -424,18 +492,18 @@ export class SyncService {
       const timer = window.setTimeout(() => {
         if (this.connectionAttemptWaiter?.generation === generation) this.connectionAttemptWaiter = undefined;
         resolve(false);
-      }, connectionWatchdogMs);
+      }, connectionDiscoveryWindowMs);
       this.connectionAttemptWaiter = { generation, resolve, timer };
     });
   }
 
-  private async connectFresh(attempt: number) {
+  private async connectFresh() {
     const secret = this.secret;
     const device = this.device;
     if (this.stopped || !navigator.onLine || !secret || !device) return false;
     const generation = ++this.connectionGeneration;
-    this.connectionState = attempt === 1 ? "connecting" : "recovering";
-    this.log(`joining room generation ${generation} attempt ${attempt}`);
+    this.connectionState = "recovering";
+    this.log(`joining room generation ${generation}`);
     this.setState({ status: "connecting", peerStatuses: this.peerStatuses() });
     const [roomId, iceServers] = await Promise.all([roomIdFromSecret(secret), this.getIceServers()]);
     if (generation !== this.connectionGeneration || this.stopped || !navigator.onLine || this.secret !== secret || this.device?.deviceId !== device.deviceId) return false;
@@ -458,7 +526,6 @@ export class SyncService {
             "wss://nostr.vulpem.com",
           ],
         },
-        rtcPolyfill: KeepPristineOfferPeerConnection,
       },
       roomId,
       {
@@ -617,39 +684,33 @@ export class SyncService {
     return this.waitForPeer(room, generation);
   }
 
-  private runReconnectFlow(reason: string) {
+  private runReconnectFlow(reason: string, refreshRelays = false) {
     if (this.reconnectPromise) return this.reconnectPromise;
     if (this.stopped || !navigator.onLine || !this.secret || !this.device) return Promise.resolve();
     const secret = this.secret;
     const deviceId = this.device.deviceId;
     const flow = (async () => {
-      this.isConnecting = true;
       this.connectionState = "recovering";
       this.log(`starting controlled reconnect: ${reason}`);
-      for (let attempt = 1; attempt <= maximumReconnectAttempts; attempt += 1) {
-        if (this.stopped || !navigator.onLine || this.secret !== secret || this.device?.deviceId !== deviceId) return;
-        this.reconnectAttempt = attempt;
-        await this.destroyCurrentConnection();
-        if (attempt > 1) await this.delay(reconnectCleanupDelayMs);
-        try {
-          if (await this.connectFresh(attempt)) return;
-        } catch (error) {
-          this.log(`join attempt ${attempt} failed`, error);
-        }
-        this.log(`connect timeout after ${connectionWatchdogMs}ms`);
-        if (attempt < maximumReconnectAttempts) this.log("retrying fresh connection");
+      if (refreshRelays) await this.refreshRelaySockets();
+      if (this.stopped || !navigator.onLine || this.secret !== secret || this.device?.deviceId !== deviceId) return;
+      await this.destroyCurrentConnection();
+      if (this.stopped || !navigator.onLine || this.secret !== secret || this.device?.deviceId !== deviceId) return;
+      try {
+        if (await this.connectFresh()) return;
+      } catch (error) {
+        this.log("fresh join failed", error);
       }
-      // Keep the third fresh room subscribed after the bounded recovery flow.
-      // This preserves cold-start discovery when the other phone opens later,
-      // without creating a leave/join loop in the foreground.
+      // Keep this one fresh room subscribed. Trystero announces at 233, 533
+      // and 1333ms during startup; replacing the room every 2.5 seconds makes
+      // two phones that foreground at slightly different times miss each
+      // other and can trigger the Nostr strategy's 60-second backoff.
       this.connectionState = this.room ? "connecting" : "disconnected";
       this.setState({ status: navigator.onLine ? "pending" : "offline", peerCount: 0 });
     })();
     this.reconnectPromise = flow;
     void flow.finally(() => {
       if (this.reconnectPromise === flow) this.reconnectPromise = undefined;
-      this.isConnecting = false;
-      this.reconnectAttempt = 0;
     });
     return flow;
   }
@@ -658,6 +719,7 @@ export class SyncService {
     if (!validPairingSecret(secret)) return;
     if (this.room || this.reconnectPromise) return this.reconnectPromise;
     this.stopped = false;
+    resumeRelayReconnection();
     this.secret = secret;
     this.device = device;
     await this.loadPeerControlState();
@@ -809,7 +871,7 @@ export class SyncService {
         return;
       }
       this.log(this.room ? "stale connection detected" : "no active room detected");
-      await this.runReconnectFlow(reason);
+      await this.runReconnectFlow(reason, true);
     })();
     this.recoveryPromise = recovery;
     void recovery.finally(() => {
@@ -819,6 +881,7 @@ export class SyncService {
   }
 
   async resumeConnection() {
+    resumeRelayReconnection();
     const now = Date.now();
     const backgroundDuration = this.lastBackgroundAt === undefined ? 0 : now - this.lastBackgroundAt;
     if (now - this.lastForegroundAt < foregroundEventDebounceMs) return this.recoveryPromise ?? this.reconnectPromise;
@@ -829,6 +892,7 @@ export class SyncService {
   }
 
   async handleOnline(forceReconnect = false) {
+    resumeRelayReconnection();
     await this.recoverConnection(forceReconnect ? "manual reconnect" : "network online", forceReconnect);
   }
 
@@ -841,11 +905,13 @@ export class SyncService {
     // pageshow/focus/resume signals from that same burst are deduplicated.
     this.lastForegroundAt = 0;
     this.clearPeerReconnectTimer();
+    pauseRelayReconnection();
   }
 
   handleOffline() {
     this.clearConnectionTimers();
     this.clearPeerReconnectTimer();
+    pauseRelayReconnection();
     this.connectionState = "disconnected";
     this.setState({ status: "offline", peerCount: 0 });
   }
