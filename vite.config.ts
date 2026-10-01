@@ -1,7 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
-import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   // Relative assets allow the same build to work at any GitHub Pages sub-path.
@@ -50,12 +49,6 @@ export default defineConfig({
   ],
   build: {
     target: "es2022",
-    sourcemap: false,
-    rollupOptions: {
-      input: {
-        app: fileURLToPath(new URL("./index.html", import.meta.url)),
-        transport: fileURLToPath(new URL("./p2p-transport.html", import.meta.url))
-      }
-    }
+    sourcemap: false
   }
 });
