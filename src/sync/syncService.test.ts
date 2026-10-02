@@ -188,4 +188,24 @@ describe("foreground WebRTC recovery", () => {
     expect(service.room).toBe(room);
     service.stop();
   });
+
+  it("retries discovery after a full no-peer window instead of waiting for the 60s announce", async () => {
+    const firstRoom = fakeRoom();
+    const secondRoom = fakeRoom();
+    joinRoom.mockReturnValueOnce(firstRoom).mockReturnValueOnce(secondRoom);
+    const service = new SyncService(repository as never) as any;
+    service.stopped = false;
+    service.secret = "d".repeat(40);
+    service.device = { deviceId: "device-d", label: "Phone D" };
+    service.handleHidden();
+
+    const firstResume = service.resumeConnection();
+    await vi.advanceTimersByTimeAsync(8_000);
+    await firstResume;
+    expect(joinRoom).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(joinRoom).toHaveBeenCalledTimes(2);
+    service.stop();
+  });
 });
