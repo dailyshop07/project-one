@@ -647,7 +647,7 @@ function BreakdownSheet({ data, request, rows, total, currency, onClose }: { dat
     <Sheet title={title} onClose={onClose}>
       {!isQuantity && <MetricDetailTabs value={view} options={[{ value: "breakdown", label: "贡献" }, { value: "history", label: request.metric === "revenue" ? "历史销售额" : "历史毛利" }]} onChange={(next) => setView(next as "breakdown" | "history")} />}
       {view === "history" && !isQuantity ? (
-        <DailyMetricHistory sales={data.sales} metric={request.metric} currency={currency} />
+        <DailyMetricHistory sales={data.sales} metric={request.metric === "profit" ? "profit" : "revenue"} currency={currency} />
       ) : (
         <>
           <div className="breakdown-summary">
