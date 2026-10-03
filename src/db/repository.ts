@@ -20,6 +20,7 @@ import type {
   SaleItem,
   Supplier,
   ProductKind,
+  AppliedSyncEvent,
   SyncFields,
   SyncEntityType,
   SyncOperation,
@@ -71,6 +72,7 @@ type DailyTurnoverInput = {
 };
 
 const nowIso = () => new Date().toISOString();
+export const LAST_APPLIED_SEQUENCE_SETTING = "sync.last-applied-sequence.v1";
 const BACKUP_RETENTION: Record<LocalBackupKind, number> = { daily: 31, manual: 10, safety: 10 };
 const clean = (value: string) => value.trim().replace(/\s+/g, " ");
 const isBusinessDate = (value: string) => {
@@ -144,8 +146,10 @@ function operationFor(
   forcedOperationId?: string,
 ): OutboxEntry {
   const entityVersion = isSyncFields(payload) ? payload.version : 1;
+  const eventId = forcedOperationId ?? randomId();
   return {
-    operationId: forcedOperationId ?? randomId(),
+    operationId: eventId,
+    eventId,
     entityType,
     entityId: payload.id,
     action: "deletedAt" in payload && payload.deletedAt ? "tombstone" : "upsert",
@@ -162,8 +166,10 @@ function operationFor(
 // outbox entry. This lets a device that already acknowledged an operation
 // still provide the current record to a newly installed peer.
 function snapshotOperationFor(entityType: SyncEntityType, payload: SyncOperation["payload"]): SyncOperation {
+  const eventId = `snapshot:${entityType}:${payload.id}:${payload.version}:${payload.updatedAt}:${payload.deviceId}`;
   return {
-    operationId: `snapshot:${entityType}:${payload.id}:${payload.version}:${payload.updatedAt}:${payload.deviceId}`,
+    operationId: eventId,
+    eventId,
     entityType,
     entityId: payload.id,
     action: payload.deletedAt ? "tombstone" : "upsert",
@@ -272,10 +278,12 @@ export class Repository {
     if (!validPairingSecret(secret)) throw new Error("邀请链接无效，请重新复制完整链接。");
     const current = await this.database.pairing.get("pairing");
     if (current?.secret === secret) return;
-    await this.database.transaction("rw", [this.database.pairing, this.database.peers, this.database.syncOutbox], async () => {
+    await this.database.transaction("rw", [this.database.pairing, this.database.peers, this.database.syncOutbox, this.database.settings], async () => {
       await this.database.pairing.put({ id: "pairing", secret, createdAt: nowIso() });
       await this.database.peers.clear();
       await this.database.syncOutbox.where("status").equals("sending").modify({ status: "pending" });
+      await this.database.settings.delete(LAST_APPLIED_SEQUENCE_SETTING);
+      await this.database.settings.delete("sync.snapshot-seeded.v2");
     });
     this.emit();
   }
@@ -327,6 +335,11 @@ export class Repository {
     return (record?.value as T | undefined) ?? fallback;
   }
 
+  async getLastAppliedSequence() {
+    const value = await this.getSetting<unknown>(LAST_APPLIED_SEQUENCE_SETTING, 0);
+    return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  }
+
   async saveDailyTurnover(input: DailyTurnoverInput) {
     const device = await this.database.devices.get("local");
     const businessDate = String(input.businessDate ?? "").trim();
@@ -360,6 +373,7 @@ export class Repository {
     await this.database.syncOutbox.put(operation);
     await this.database.processedOperations.put({
       operationId: operation.operationId,
+      eventId: operation.eventId ?? operation.operationId,
       processedAt: nowIso(),
       sourceDeviceId: operation.deviceId,
     });
@@ -1151,10 +1165,79 @@ export class Repository {
     this.emit();
   }
 
-  async applyRemoteOperations(operations: SyncOperation[]) {
-    const acknowledged: string[] = [];
-    let changed = false;
-    await this.database.transaction(
+  private async applyOperationInTransaction(operation: SyncOperation, eventId: string) {
+    if (!operation?.operationId || !operation.entityId || !operation.deviceId || !operation.payload) return { accepted: false, changed: false };
+    const processed = await this.database.processedOperations.get(eventId)
+      ?? (eventId === operation.operationId ? undefined : await this.database.processedOperations.get(operation.operationId));
+    if (processed) return { accepted: true, changed: false };
+    const payload = operation.payload;
+    if (payload.id !== operation.entityId) return { accepted: false, changed: false };
+    let applied = false;
+    if (operation.entityType === "inventoryMovement") {
+      const movement = payload as InventoryMovement;
+      if (!(await this.database.inventoryMovements.where("operationId").equals(movement.operationId).first())) {
+        await this.database.inventoryMovements.add(movement);
+        applied = true;
+      }
+    } else if (operation.entityType === "dailyTurnover") {
+      const turnover = payload as DailyTurnover;
+      const local = await this.database.dailyTurnovers.get(turnover.id);
+      if (!local || compareVersions(local, turnover) > 0) {
+        await this.database.dailyTurnovers.put(turnover);
+        applied = true;
+      }
+      if (local && local.version === turnover.version && JSON.stringify(local) !== JSON.stringify(turnover)) {
+        const incomingWins = compareVersions(local, turnover) > 0;
+        await this.database.conflicts.put({
+          id: `${operation.entityType}:${operation.entityId}:${eventId}`,
+          entityType: operation.entityType,
+          entityId: operation.entityId,
+          localVersion: local.version,
+          incomingVersion: turnover.version,
+          winningDeviceId: incomingWins ? turnover.deviceId : local.deviceId,
+          recordedAt: nowIso(),
+        });
+      }
+    } else {
+      const table = operation.entityType === "product"
+        ? this.database.products
+        : operation.entityType === "category"
+          ? this.database.categories
+          : operation.entityType === "supplier"
+            ? this.database.suppliers
+            : operation.entityType === "saleItem"
+              ? this.database.saleItems
+              : this.database.sales;
+      const incoming = payload as Product | Category | Supplier | Sale | SaleItem;
+      const local = await table.get(incoming.id as never) as Product | Category | Supplier | Sale | SaleItem | undefined;
+      if (!local || compareVersions(local, incoming) > 0) {
+        await table.put(incoming as never);
+        applied = true;
+      }
+      if (local && local.version === incoming.version && JSON.stringify(local) !== JSON.stringify(incoming)) {
+        const incomingWins = compareVersions(local, incoming) > 0;
+        await this.database.conflicts.put({
+          id: `${operation.entityType}:${operation.entityId}:${eventId}`,
+          entityType: operation.entityType,
+          entityId: operation.entityId,
+          localVersion: local.version,
+          incomingVersion: incoming.version,
+          winningDeviceId: incomingWins ? incoming.deviceId : local.deviceId,
+          recordedAt: nowIso(),
+        });
+      }
+    }
+    await this.database.processedOperations.put({
+      operationId: eventId,
+      eventId,
+      processedAt: nowIso(),
+      sourceDeviceId: operation.deviceId,
+    });
+    return { accepted: true, changed: applied };
+  }
+
+  private async withRemoteOperationTables<T>(callback: () => Promise<T>) {
+    return this.database.transaction(
       "rw",
       [
         this.database.categories,
@@ -1166,85 +1249,70 @@ export class Repository {
         this.database.dailyTurnovers,
         this.database.processedOperations,
         this.database.conflicts,
+        this.database.settings,
       ],
-      async () => {
-        for (const operation of operations.slice(0, 100)) {
-          if (!operation?.operationId || !operation.entityId || !operation.deviceId || !operation.payload) continue;
-          if (await this.database.processedOperations.get(operation.operationId)) {
-            acknowledged.push(operation.operationId);
-            continue;
-          }
-          const payload = operation.payload;
-          if (payload.id !== operation.entityId) continue;
-          let applied = false;
-          if (operation.entityType === "inventoryMovement") {
-            const movement = payload as InventoryMovement;
-            if (!(await this.database.inventoryMovements.where("operationId").equals(movement.operationId).first())) {
-              await this.database.inventoryMovements.add(movement);
-              applied = true;
-            }
-          } else if (operation.entityType === "dailyTurnover") {
-            const turnover = payload as DailyTurnover;
-            const local = await this.database.dailyTurnovers.get(turnover.id);
-            if (!local || compareVersions(local, turnover) > 0) {
-              await this.database.dailyTurnovers.put(turnover);
-              applied = true;
-            }
-            if (local && local.version === turnover.version && JSON.stringify(local) !== JSON.stringify(turnover)) {
-              const incomingWins = compareVersions(local, turnover) > 0;
-              await this.database.conflicts.put({
-                id: `${operation.entityType}:${operation.entityId}:${operation.operationId}`,
-                entityType: operation.entityType,
-                entityId: operation.entityId,
-                localVersion: local.version,
-                incomingVersion: turnover.version,
-                winningDeviceId: incomingWins ? turnover.deviceId : local.deviceId,
-                recordedAt: nowIso(),
-              });
-            }
-          } else {
-            const table = operation.entityType === "product"
-              ? this.database.products
-              : operation.entityType === "category"
-                ? this.database.categories
-                : operation.entityType === "supplier"
-                  ? this.database.suppliers
-                  : operation.entityType === "saleItem"
-                    ? this.database.saleItems
-                    : this.database.sales;
-            const incoming = payload as Product | Category | Supplier | Sale | SaleItem;
-            const local = await table.get(incoming.id as never) as Product | Category | Supplier | Sale | SaleItem | undefined;
-            if (!local || compareVersions(local, incoming) > 0) {
-              await table.put(incoming as never);
-              applied = true;
-            }
-            if (local && local.version === incoming.version && JSON.stringify(local) !== JSON.stringify(incoming)) {
-              const incomingWins = compareVersions(local, incoming) > 0;
-              await this.database.conflicts.put({
-                id: `${operation.entityType}:${operation.entityId}:${operation.operationId}`,
-                entityType: operation.entityType,
-                entityId: operation.entityId,
-                localVersion: local.version,
-                incomingVersion: incoming.version,
-                winningDeviceId: incomingWins ? incoming.deviceId : local.deviceId,
-                recordedAt: nowIso(),
-              });
-            }
-          }
-          // A full snapshot can be retried or arrive at the same time as a
-          // second relay delivery. `put` keeps that retry idempotent.
-          await this.database.processedOperations.put({
-            operationId: operation.operationId,
-            processedAt: nowIso(),
-            sourceDeviceId: operation.deviceId,
-          });
-          acknowledged.push(operation.operationId);
-          changed ||= applied;
-        }
-      },
+      callback,
     );
+  }
+
+  async applyRemoteOperations(operations: SyncOperation[]) {
+    const acknowledged: string[] = [];
+    let changed = false;
+    await this.withRemoteOperationTables(async () => {
+      for (const operation of operations.slice(0, 100)) {
+        const eventId = operation.eventId ?? operation.operationId;
+        const result = await this.applyOperationInTransaction(operation, eventId);
+        if (!result.accepted) continue;
+        acknowledged.push(eventId);
+        changed ||= result.changed;
+      }
+    });
     if (changed) this.emit();
     return acknowledged;
+  }
+
+  async applyRemoteEvents(events: AppliedSyncEvent[]) {
+    let lastAppliedSequence = await this.getLastAppliedSequence();
+    let changed = false;
+    let gap = false;
+    await this.withRemoteOperationTables(async () => {
+      for (const event of events.slice().sort((left, right) => left.sequence - right.sequence).slice(0, 100)) {
+        if (!Number.isSafeInteger(event.sequence) || event.sequence <= 0) continue;
+        if (event.sequence <= lastAppliedSequence) continue;
+        if (event.sequence !== lastAppliedSequence + 1) {
+          gap = true;
+          break;
+        }
+        const operation = { ...event.operation, eventId: event.eventId };
+        const result = await this.applyOperationInTransaction(operation, event.eventId);
+        if (!result.accepted) {
+          gap = true;
+          break;
+        }
+        lastAppliedSequence = event.sequence;
+        changed ||= result.changed;
+      }
+      await this.database.settings.put({ key: LAST_APPLIED_SEQUENCE_SETTING, value: lastAppliedSequence });
+    });
+    if (changed) this.emit();
+    return { lastAppliedSequence, gap };
+  }
+
+  async applyCheckpoint(operations: SyncOperation[], baseSequence: number) {
+    if (!Number.isSafeInteger(baseSequence) || baseSequence < 0) throw new Error("Invalid sync checkpoint");
+    let lastAppliedSequence = await this.getLastAppliedSequence();
+    let changed = false;
+    await this.withRemoteOperationTables(async () => {
+      for (const operation of operations.slice(0, 50_000)) {
+        const eventId = operation.eventId ?? operation.operationId;
+        const result = await this.applyOperationInTransaction({ ...operation, eventId }, eventId);
+        changed ||= result.changed;
+      }
+      lastAppliedSequence = Math.max(lastAppliedSequence, baseSequence);
+      await this.database.settings.put({ key: LAST_APPLIED_SEQUENCE_SETTING, value: lastAppliedSequence });
+    });
+    if (changed) this.emit();
+    return lastAppliedSequence;
   }
 
   async exportBackup(): Promise<BackupDocument> {

@@ -8,7 +8,7 @@ Project One is an iPhone-first, local-first PWA for daily records, quick sales, 
 - GitHub Pages serves only the compiled application shell and static assets.
 - No account, cloud database, analytics, or telemetry is used.
 - Pairing secrets and device identifiers are generated at runtime and are never part of the repository.
-- Cloudflare Workers + Durable Objects + WebSocket are used only to relay queued operations between paired devices. Durable Objects are not the business database.
+- Cloudflare Workers + Durable Objects + WebSocket provide the sync transport and a durable, encrypted room event log. IndexedDB is still the primary business database; Cloudflare stores opaque sync events/checkpoints only so an offline device can catch up later.
 - On iOS, Safari and a standalone Home Screen Web App have separate storage. The invite flow uses a short-lived first-party cookie for the install handoff, and every newly discovered peer receives an idempotent full data snapshot before incremental operations continue.
 - After 20:00 local time, the app creates one automatic local backup per day when it is open or the next time it is opened. It keeps recent backup history on the device for recovery; export a JSON backup to Files for protection against clearing browser data or uninstalling the app.
 
@@ -31,7 +31,11 @@ The included Pages workflow builds and deploys `dist/`. In the repository settin
 
 ## Cloudflare WebSocket sync
 
-The independent relay implementation lives in [`cloudflare-sync/`](./cloudflare-sync/). It uses the Durable Objects WebSocket Hibernation API: each pairing secret maps to one opaque room ID, and the Durable Object keeps only live connection metadata and forwards messages. IndexedDB remains the source of truth on every device; snapshots, outbox operations, acknowledgements, idempotency and conflict resolution remain in the existing Repository.
+The independent adapter/backend lives in [`cloudflare-sync/`](./cloudflare-sync/). It uses the Durable Objects WebSocket Hibernation API and SQLite Storage. Each pairing secret maps to one opaque room ID. A local business change is committed to IndexedDB first, remains in the local pending outbox until the Worker acknowledges durable storage, and is then assigned a monotonically increasing room sequence. A device reconnects with its IndexedDB `lastAppliedSequence`; the Durable Object sends missing pages before allowing live events.
+
+Event payloads and checkpoints are encrypted in the browser with an AES-GCM key derived from the pairing secret. The Worker routes and stores ciphertext, not the normal business records. Each event also has a unique `eventId`, and both the server log and local `processedOperations` table make retries idempotent.
+
+The event log is retained until a caught-up device uploads an encrypted checkpoint. The Durable Object then compacts events covered by that checkpoint while retaining the latest checkpoint, so a device that has been offline for a long time can still recover without requiring another pairing.
 
 Install and deploy the relay from that directory with a browser OAuth flow. Never put a Cloudflare token, pairing secret or business data in Git:
 

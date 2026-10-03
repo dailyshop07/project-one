@@ -1,21 +1,26 @@
-import type { DeviceRecord, SyncOperation } from "../types";
+import type { DeviceRecord, StoredSyncEvent, SyncOperation } from "../types";
 import type { Repository } from "../db/repository";
 import { randomId, roomIdFromSecret, validPairingSecret } from "../db/identity";
-import { CloudflareSyncAdapter, configuredCloudflareSyncEndpoint, type CloudflareSyncEvent, type SyncPeer } from "./cloudflareSyncAdapter";
+import {
+  CloudflareSyncAdapter,
+  configuredCloudflareSyncEndpoint,
+  type CloudflareSyncEvent,
+  type SyncPeer,
+} from "./cloudflareSyncAdapter";
+import { createSyncCipher, splitCiphertext, type SyncCipher } from "./syncCrypto";
 
 export type SyncStatus = "local" | "offline" | "connecting" | "connected" | "syncing" | "pending" | "error";
 
 const pendingPairingStorageKey = "project-one-pending-pairing-v1";
 const pendingPairingCookieName = "project_one_pending_pairing_v1";
 const pendingPairingMaxAgeMs = 24 * 60 * 60 * 1000;
-const snapshotBatchSize = 50;
-const pendingConnectionNoticeMs = 3_000;
-const foregroundEventDebounceMs = 1_000;
-const snapshotTimeoutMs = 15_000;
 const blockedPeerSettingKey = "sync.blocked-peer-ids.v1";
 const disconnectedPeerSettingKey = "sync.disconnected-peer-ids.v1";
+const snapshotSeededSettingKey = "sync.snapshot-seeded.v2";
 const reconnectInitialDelayMs = 1_000;
 const reconnectMaxDelayMs = 30_000;
+const foregroundEventDebounceMs = 1_000;
+const uploadBatchSize = 50;
 
 export interface SyncViewState {
   status: SyncStatus;
@@ -26,41 +31,10 @@ export interface SyncViewState {
 
 export type PeerStatus = "connected" | "disconnected" | "unlinked" | "known";
 
-type HelloMessage = { protocol: 1; deviceId: string; label: string };
-type OperationsMessage = {
-  protocol: 1;
-  senderDeviceId: string;
-  operations: SyncOperation[];
-  snapshot?: boolean;
-  snapshotId?: string;
-  batchIndex?: number;
-  batchCount?: number;
-};
-type SyncControlMessage =
-  | { protocol: 1; type: "requestSnapshot"; senderDeviceId: string; requestId: string }
-  | { protocol: 1; type: "snapshotComplete"; senderDeviceId: string; snapshotId: string; batchCount: number };
-type AckMessage = { protocol: 1; senderDeviceId: string; operationIds: string[] };
-
-const isHello = (value: unknown): value is HelloMessage => {
-  const message = value as Partial<HelloMessage>;
-  return message?.protocol === 1 && typeof message.deviceId === "string" && typeof message.label === "string";
-};
-
-const isOperations = (value: unknown): value is OperationsMessage => {
-  const message = value as Partial<OperationsMessage>;
-  return message?.protocol === 1 && typeof message.senderDeviceId === "string" && Array.isArray(message.operations);
-};
-
-const isSyncControl = (value: unknown): value is SyncControlMessage => {
-  const message = value as Partial<SyncControlMessage>;
-  if (message?.protocol !== 1 || typeof message.senderDeviceId !== "string" || typeof message.type !== "string") return false;
-  if (message.type === "requestSnapshot") return typeof message.requestId === "string";
-  return message.type === "snapshotComplete" && typeof message.snapshotId === "string" && typeof message.batchCount === "number";
-};
-
-const isAck = (value: unknown): value is AckMessage => {
-  const message = value as Partial<AckMessage>;
-  return message?.protocol === 1 && typeof message.senderDeviceId === "string" && Array.isArray(message.operationIds);
+type IncomingCheckpoint = {
+  baseSequence: number;
+  chunkCount: number;
+  parts: Map<number, string>;
 };
 
 export class SyncService {
@@ -76,15 +50,17 @@ export class SyncService {
   private blockedPeerIds = new Set<string>();
   private disconnectedPeerIds = new Set<string>();
   private peerControlStateLoaded = false;
-  private flushing = new Set<string>();
-  private announcing = new Set<string>();
-  private snapshotting = new Set<string>();
-  private snapshotSynced = new Set<string>();
-  private snapshotWaiters = new Map<string, { resolve: (complete: boolean) => void; timer: number }>();
-  private incomingSnapshots = new Map<string, { batchCount: number; received: Set<number> }>();
   private device?: DeviceRecord;
   private secret?: string;
-  private pendingTimer?: number;
+  private cipher?: SyncCipher;
+  private lastAppliedSequence = 0;
+  private latestServerSequence = 0;
+  private snapshotSeeded = false;
+  private checkpointUploads = new Map<string, IncomingCheckpoint>();
+  private eventQueue: Promise<void> = Promise.resolve();
+  private flushPromise?: Promise<void>;
+  private snapshotSeedPromise?: Promise<void>;
+  private checkpointUploadPromise?: Promise<void>;
   private deliveryTimer?: number;
   private reconnectTimer?: number;
   private reconnectDelayMs = reconnectInitialDelayMs;
@@ -145,22 +121,18 @@ export class SyncService {
     ]);
   }
 
-  private shouldRejectPeer(deviceId: string) {
-    return this.blockedPeerIds.has(deviceId) || this.disconnectedPeerIds.has(deviceId);
-  }
-
-  private clearConnectionTimers() {
-    if (this.pendingTimer !== undefined) window.clearTimeout(this.pendingTimer);
-    this.pendingTimer = undefined;
-  }
-
   private clearReconnectTimer() {
     if (this.reconnectTimer !== undefined) window.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
   }
 
-  private delay(milliseconds: number) {
-    return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+  private scheduleReconnect(delayMs = this.reconnectDelayMs) {
+    if (this.reconnectTimer !== undefined || this.stopped || !navigator.onLine || document.visibilityState === "hidden") return;
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = undefined;
+      void this.runReconnectFlow("automatic retry");
+    }, delayMs);
+    this.reconnectDelayMs = Math.min(reconnectMaxDelayMs, Math.max(reconnectInitialDelayMs, this.reconnectDelayMs * 2));
   }
 
   private clearDeliveryTimer() {
@@ -173,60 +145,16 @@ export class SyncService {
     this.deliveryTimer = window.setInterval(() => void this.retryDelivery(), 2_500);
   }
 
-  private schedulePendingNotice() {
-    if (this.pendingTimer !== undefined || this.stopped || !navigator.onLine || !this.adapter?.isOpen) return;
-    this.pendingTimer = window.setTimeout(() => {
-      this.pendingTimer = undefined;
-      if (this.adapter?.isOpen && !this.currentPeers.size) this.setState({ status: "pending", peerCount: 0 });
-    }, pendingConnectionNoticeMs);
-  }
-
-  private scheduleReconnect(delayMs = this.reconnectDelayMs) {
-    if (this.reconnectTimer !== undefined || this.stopped || !navigator.onLine || document.visibilityState === "hidden") return;
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = undefined;
-      void this.runReconnectFlow("automatic retry");
-    }, delayMs);
-    this.reconnectDelayMs = Math.min(reconnectMaxDelayMs, Math.max(reconnectInitialDelayMs, this.reconnectDelayMs * 2));
-  }
-
-  private snapshotWaiterKey(peerId: string, snapshotId: string) {
-    return `${peerId}:${snapshotId}`;
-  }
-
-  private resolveSnapshot(peerId: string, snapshotId: string, complete: boolean) {
-    const key = this.snapshotWaiterKey(peerId, snapshotId);
-    const waiter = this.snapshotWaiters.get(key);
-    if (!waiter) return;
-    window.clearTimeout(waiter.timer);
-    this.snapshotWaiters.delete(key);
-    waiter.resolve(complete);
-  }
-
-  private clearSnapshotState() {
-    for (const waiter of this.snapshotWaiters.values()) {
-      window.clearTimeout(waiter.timer);
-      waiter.resolve(false);
-    }
-    this.snapshotWaiters.clear();
-    this.incomingSnapshots.clear();
-  }
-
   private clearPeerState() {
     this.currentPeers.clear();
     this.peerDevices.clear();
-    this.flushing.clear();
-    this.announcing.clear();
-    this.snapshotting.clear();
-    this.snapshotSynced.clear();
-    this.clearSnapshotState();
+    this.checkpointUploads.clear();
+    this.setState({ peerCount: 0, peerStatuses: this.peerStatuses() });
   }
 
   private async destroyCurrentConnection() {
     this.connectionGeneration += 1;
-    this.clearConnectionTimers();
     this.clearReconnectTimer();
-    this.clearSnapshotState();
     const adapter = this.adapter;
     this.adapter = undefined;
     this.adapterCleanup?.();
@@ -236,59 +164,114 @@ export class SyncService {
     this.setState({ status: navigator.onLine ? "connecting" : "offline", peerCount: 0, peerStatuses: this.peerStatuses() });
   }
 
+  private enqueue(task: () => Promise<void>) {
+    const next = this.eventQueue.then(task, task);
+    this.eventQueue = next.catch(() => undefined);
+    return next;
+  }
+
   private async handleAdapterEvent(event: CloudflareSyncEvent, generation: number, adapter: CloudflareSyncAdapter) {
     if (!this.isCurrent(generation, adapter)) return;
+    if (event.type === "catchup") {
+      await this.enqueue(async () => {
+        const result = await this.applyStoredEvents(event.events);
+        if (!this.isCurrent(generation, adapter)) return;
+        if (result.gap) {
+          adapter.requestCatchup(result.lastAppliedSequence);
+          return;
+        }
+        adapter.ackCatchup(result.lastAppliedSequence);
+      });
+      return;
+    }
+    if (event.type === "checkpointStart") {
+      this.checkpointUploads.set(event.checkpointId, { baseSequence: event.baseSequence, chunkCount: event.chunkCount, parts: new Map() });
+      return;
+    }
+    if (event.type === "checkpointChunk") {
+      const checkpoint = this.checkpointUploads.get(event.checkpointId);
+      if (checkpoint && event.chunkIndex >= 0 && event.chunkIndex < checkpoint.chunkCount) checkpoint.parts.set(event.chunkIndex, event.data);
+      return;
+    }
+    if (event.type === "checkpointComplete") {
+      await this.enqueue(async () => {
+        const checkpoint = this.checkpointUploads.get(event.checkpointId);
+        this.checkpointUploads.delete(event.checkpointId);
+        if (!checkpoint || checkpoint.parts.size !== checkpoint.chunkCount || checkpoint.baseSequence !== event.baseSequence || !this.cipher) {
+          adapter.requestCatchup(this.lastAppliedSequence);
+          return;
+        }
+        try {
+          const payload = Array.from({ length: checkpoint.chunkCount }, (_, index) => checkpoint.parts.get(index) ?? "").join("");
+          const decoded = await this.cipher.decryptCheckpoint(payload);
+          if (decoded.baseSequence !== event.baseSequence) throw new Error("checkpoint sequence mismatch");
+          await this.repository.applyCheckpoint(decoded.operations, decoded.baseSequence);
+          this.lastAppliedSequence = await this.repository.getLastAppliedSequence();
+          adapter.ackCheckpoint(event.checkpointId, event.baseSequence);
+        } catch (error) {
+          this.log("checkpoint apply failed", error);
+          adapter.requestCatchup(this.lastAppliedSequence);
+        }
+      });
+      return;
+    }
+    if (event.type === "events") {
+      await this.enqueue(async () => {
+        const result = await this.applyStoredEvents(event.events);
+        if (result.gap && this.isCurrent(generation, adapter)) adapter.requestCatchup(result.lastAppliedSequence);
+        if (!result.gap && this.isCurrent(generation, adapter)) {
+          await this.repository.markPeerSynced(event.from.deviceId);
+          this.setState({ status: "connected", lastSyncedAt: new Date().toISOString() });
+        }
+      });
+      return;
+    }
+    if (event.type === "publishAck") {
+      this.latestServerSequence = Math.max(this.latestServerSequence, event.latestSequence);
+      return;
+    }
+    if (event.type === "catchupComplete") {
+      this.latestServerSequence = Math.max(this.latestServerSequence, event.latestSequence);
+      return;
+    }
     if (event.type === "open") {
       this.reconnectDelayMs = reconnectInitialDelayMs;
-      this.clearConnectionTimers();
+      this.latestServerSequence = Math.max(this.latestServerSequence, event.latestSequence);
       this.currentPeers = new Set(event.peers.map((peer) => peer.deviceId).filter((deviceId) => deviceId !== this.device?.deviceId));
       this.peerDevices = new Map(event.peers.map((peer) => [peer.deviceId, peer.label]));
-      this.setState({ status: this.currentPeers.size ? "connected" : "connecting", peerCount: this.currentPeers.size, peerStatuses: this.peerStatuses() });
+      for (const peer of event.peers) void this.repository.rememberPeer(peer.deviceId, peer.label);
+      this.setState({ status: "connected", peerCount: this.currentPeers.size, peerStatuses: this.peerStatuses() });
       this.startDeliveryWatch();
-      if (!this.currentPeers.size) this.schedulePendingNotice();
-      for (const peer of event.peers) void this.announcePeer(peer.deviceId, generation);
+      void this.synchronizeOnOpen(event.needsSnapshot, generation, adapter);
       return;
     }
     if (event.type === "peerJoined") {
       if (event.peer.deviceId === this.device?.deviceId) return;
       this.peerDevices.set(event.peer.deviceId, event.peer.label);
       this.currentPeers.add(event.peer.deviceId);
-      this.clearConnectionTimers();
-      if (!this.shouldRejectPeer(event.peer.deviceId)) {
-        await this.repository.rememberPeer(event.peer.deviceId, event.peer.label);
-        this.setState({ status: "connected", peerCount: this.currentPeers.size, peerStatuses: this.peerStatuses() });
-        void this.announcePeer(event.peer.deviceId, generation);
-      } else {
-        this.publishPeerStatuses();
-      }
+      await this.repository.rememberPeer(event.peer.deviceId, event.peer.label);
+      this.setState({ status: "connected", peerCount: this.currentPeers.size, peerStatuses: this.peerStatuses() });
       return;
     }
     if (event.type === "peerLeft") {
       this.currentPeers.delete(event.deviceId);
       this.peerDevices.delete(event.deviceId);
-      this.snapshotSynced.delete(event.deviceId);
-      this.announcing.delete(`${generation}:${event.deviceId}`);
-      for (const key of this.incomingSnapshots.keys()) if (key.startsWith(`${event.deviceId}:`)) this.incomingSnapshots.delete(key);
-      if (!this.currentPeers.size) {
-        this.setState({ status: this.adapter?.isOpen ? "pending" : navigator.onLine ? "connecting" : "offline", peerCount: 0, peerStatuses: this.peerStatuses() });
-        this.schedulePendingNotice();
-      } else {
-        this.setState({ status: "connected", peerCount: this.currentPeers.size, peerStatuses: this.peerStatuses() });
-      }
+      this.setState({ status: this.adapter?.isOpen ? "connected" : navigator.onLine ? "connecting" : "offline", peerCount: this.currentPeers.size, peerStatuses: this.peerStatuses() });
+      return;
+    }
+    if (event.type === "checkpointRequest") {
+      await this.uploadCheckpoint(event.targetSequence, generation, adapter);
       return;
     }
     if (event.type === "close") {
-      this.clearConnectionTimers();
       this.clearPeerState();
       this.setState({ status: navigator.onLine ? "connecting" : "offline", peerCount: 0, peerStatuses: this.peerStatuses() });
       this.scheduleReconnect();
       return;
     }
     if (event.type === "error") {
-      if (!this.currentPeers.size) this.setState({ status: navigator.onLine ? "error" : "offline" });
-      return;
+      this.setState({ status: navigator.onLine ? "error" : "offline" });
     }
-    await this.handleIncomingMessage(event.from, event.message, generation, adapter);
   }
 
   private async connectFresh() {
@@ -307,7 +290,7 @@ export class SyncService {
     this.adapterCleanup = adapter.subscribe((event) => void this.handleAdapterEvent(event, generation, adapter));
     this.setState({ status: "connecting", peerCount: 0, peerStatuses: this.peerStatuses() });
     try {
-      await adapter.connect({ roomId, secret, device });
+      await adapter.connect({ roomId, secret, device, lastAppliedSequence: this.lastAppliedSequence });
       if (!this.isCurrent(generation, adapter)) return false;
       return true;
     } catch (error) {
@@ -341,174 +324,142 @@ export class SyncService {
     return flow;
   }
 
-  private async announcePeer(peerId: string, generation: number) {
-    const key = `${generation}:${peerId}`;
-    if (!this.isCurrent(generation) || this.announcing.has(key) || this.shouldRejectPeer(peerId)) return;
-    this.announcing.add(key);
-    try {
-      await this.send({ protocol: 1, deviceId: this.device!.deviceId, label: this.device!.label } as HelloMessage, peerId);
-      await this.send({ protocol: 1, type: "requestSnapshot", senderDeviceId: this.device!.deviceId, requestId: randomId() } as SyncControlMessage, peerId);
-      await this.sendSnapshotToPeer(peerId, true, generation);
-      await this.flushToPeer(peerId, generation);
-    } catch {
-      if (this.isCurrent(generation)) this.setState({ status: navigator.onLine ? "pending" : "offline" });
-    } finally {
-      this.announcing.delete(key);
+  private async applyStoredEvents(events: StoredSyncEvent[]) {
+    if (!this.cipher) return { lastAppliedSequence: this.lastAppliedSequence, gap: false };
+    const operations = [] as Array<{ sequence: number; eventId: string; operation: SyncOperation }>;
+    for (const event of events.slice().sort((left, right) => left.sequence - right.sequence)) {
+      if (event.sequence <= this.lastAppliedSequence) continue;
+      const operation = await this.cipher.decryptOperation(event.eventId, event.encrypted, event.payload);
+      // The outer sender is the device that uploaded the event. The payload's
+      // deviceId is the original business-record author and may legitimately
+      // belong to another device when a device seeds a migrated snapshot.
+      if (!operation || typeof operation.deviceId !== "string" || !operation.deviceId) throw new Error("同步事件来源不一致");
+      operations.push({ sequence: event.sequence, eventId: event.eventId, operation: { ...operation, eventId: event.eventId } });
     }
+    const result = await this.repository.applyRemoteEvents(operations);
+    this.lastAppliedSequence = result.lastAppliedSequence;
+    return result;
   }
 
-  private async send(message: unknown, targetDeviceId?: string) {
-    if (!this.adapter?.isOpen) throw new Error("同步连接尚未打开");
-    await this.adapter.send(message, targetDeviceId);
-  }
-
-  private async sendSnapshotToPeer(peerId: string, force = false, generation = this.connectionGeneration) {
-    const snapshottingKey = `${generation}:${peerId}`;
-    if (!this.device || !this.adapter?.isOpen || !this.isCurrent(generation) || this.shouldRejectPeer(peerId) || this.snapshotting.has(snapshottingKey) || (!force && this.snapshotSynced.has(peerId))) return;
-    this.snapshotting.add(snapshottingKey);
-    this.setState({ status: "syncing" });
-    const snapshotId = randomId();
-    const waiterKey = this.snapshotWaiterKey(peerId, snapshotId);
-    const completion = new Promise<boolean>((resolve) => {
-      const timer = window.setTimeout(() => {
-        this.snapshotWaiters.delete(waiterKey);
-        resolve(false);
-      }, snapshotTimeoutMs);
-      this.snapshotWaiters.set(waiterKey, { resolve, timer });
-    });
-    try {
+  private async seedServerSnapshot() {
+    if (this.snapshotSeeded || !this.adapter?.isReady || !this.device || !this.cipher) return;
+    if (this.snapshotSeedPromise) return this.snapshotSeedPromise;
+    const flow = (async () => {
       const operations = await this.repository.snapshotOperations();
-      const batches = operations.length
-        ? Array.from({ length: Math.ceil(operations.length / snapshotBatchSize) }, (_, index) => operations.slice(index * snapshotBatchSize, (index + 1) * snapshotBatchSize))
-        : [[]];
-      for (const [batchIndex, batch] of batches.entries()) {
-        if (!this.isCurrent(generation) || !this.currentPeers.has(peerId)) {
-          this.resolveSnapshot(peerId, snapshotId, false);
-          return;
-        }
-        await this.send({
-          protocol: 1,
-          senderDeviceId: this.device.deviceId,
-          operations: batch,
-          snapshot: true,
-          snapshotId,
-          batchIndex,
-          batchCount: batches.length,
-        } as OperationsMessage, peerId);
+      for (let index = 0; index < operations.length; index += uploadBatchSize) {
+        if (!this.adapter?.isReady || !this.device || !this.cipher) throw new Error("同步连接已关闭");
+        const batch = operations.slice(index, index + uploadBatchSize).map((operation) => ({
+          eventId: `${this.device!.deviceId}:seed:${operation.eventId ?? operation.operationId}`,
+          senderDeviceId: this.device!.deviceId,
+          createdAt: operation.createdAt,
+          encrypted: false,
+          payload: "",
+          operation,
+        }));
+        const encrypted = await Promise.all(batch.map(async (entry) => {
+          const result = await this.cipher!.encryptOperation(entry.eventId, entry.operation);
+          return { ...entry, encrypted: result.encrypted, payload: result.payload };
+        }));
+        const accepted = await this.adapter.publish(encrypted.map(({ eventId, senderDeviceId, createdAt, encrypted: isEncrypted, payload }) => ({ eventId, senderDeviceId, createdAt, encrypted: isEncrypted, payload })));
+        if (accepted.length !== encrypted.length) throw new Error("服务器未确认全部初始同步事件");
       }
-      if (await completion && this.isCurrent(generation)) {
-        this.snapshotSynced.add(peerId);
-        this.setState({ status: "connected", lastSyncedAt: new Date().toISOString() });
-      } else if (this.isCurrent(generation)) {
-        this.setState({ status: navigator.onLine ? "pending" : "offline" });
-      }
-    } catch {
-      this.resolveSnapshot(peerId, snapshotId, false);
-      if (this.isCurrent(generation)) this.setState({ status: navigator.onLine ? "pending" : "offline" });
-    } finally {
-      this.snapshotting.delete(snapshottingKey);
-    }
+      await this.repository.setSetting(snapshotSeededSettingKey, true);
+      this.snapshotSeeded = true;
+    })();
+    this.snapshotSeedPromise = flow;
+    void flow.finally(() => {
+      if (this.snapshotSeedPromise === flow) this.snapshotSeedPromise = undefined;
+    });
+    return flow;
   }
 
-  private async flushToPeer(peerId: string, generation = this.connectionGeneration) {
-    const flushingKey = `${generation}:${peerId}`;
-    if (!this.device || !this.adapter?.isOpen || !this.isCurrent(generation) || this.shouldRejectPeer(peerId) || this.flushing.has(flushingKey)) return;
-    this.flushing.add(flushingKey);
-    try {
-      while (true) {
-        const pending = await this.repository.pendingOperations(50);
-        if (!this.isCurrent(generation) || !pending.length) return;
-        const ids = pending.map((operation) => operation.operationId);
-        await this.repository.markSending(ids);
-        this.setState({ status: "syncing" });
+  private async flushToServer() {
+    if (this.flushPromise) return this.flushPromise;
+    const flow = (async () => {
+      if (this.snapshotSeedPromise) await this.snapshotSeedPromise;
+      if (!this.device || !this.cipher || !this.adapter?.isReady) return;
+      await this.repository.requeueStaleSending(4_000);
+      while (this.adapter?.isReady && this.device && this.cipher && !this.stopped) {
+        const pending = await this.repository.pendingOperations(uploadBatchSize);
+        if (!pending.length) break;
+        const operationIds = pending.map((operation) => operation.operationId);
+        await this.repository.markSending(operationIds);
         try {
-          await this.send({ protocol: 1, senderDeviceId: this.device.deviceId, operations: pending } as OperationsMessage, peerId);
-        } catch {
-          await this.repository.requeueOperations(ids);
-          if (this.isCurrent(generation)) this.setState({ status: navigator.onLine ? "pending" : "offline" });
+          const events = await Promise.all(pending.map(async (operation) => {
+            const eventId = operation.eventId ?? operation.operationId;
+            const result = await this.cipher!.encryptOperation(eventId, operation);
+            return { eventId, senderDeviceId: this.device!.deviceId, createdAt: operation.createdAt, encrypted: result.encrypted, payload: result.payload, operationId: operation.operationId };
+          }));
+          const accepted = await this.adapter.publish(events.map(({ eventId, senderDeviceId, createdAt, encrypted, payload }) => ({ eventId, senderDeviceId, createdAt, encrypted, payload })));
+          const acceptedEventIds = new Set(accepted.map((entry) => entry.eventId));
+          const acknowledged = events.filter((entry) => acceptedEventIds.has(entry.eventId)).map((entry) => entry.operationId);
+          const missing = events.filter((entry) => !acceptedEventIds.has(entry.eventId)).map((entry) => entry.operationId);
+          await this.repository.acknowledgeOperations(acknowledged);
+          await this.repository.requeueOperations(missing);
+          this.latestServerSequence = Math.max(this.latestServerSequence, ...accepted.map((entry) => entry.sequence), 0);
+          if (missing.length) {
+            this.setState({ status: "pending" });
+            return;
+          }
+        } catch (error) {
+          await this.repository.requeueOperations(operationIds);
+          this.log("event upload failed", error);
+          this.setState({ status: navigator.onLine ? "pending" : "offline" });
           return;
         }
       }
-    } finally {
-      this.flushing.delete(flushingKey);
+      if (this.adapter?.isReady && this.latestServerSequence > this.lastAppliedSequence) {
+        this.setState({ status: "syncing" });
+        this.adapter.requestCatchup(this.lastAppliedSequence);
+      } else if (this.adapter?.isReady) {
+        this.setState({ status: "connected", lastSyncedAt: new Date().toISOString() });
+      }
+    })();
+    this.flushPromise = flow;
+    void flow.finally(() => {
+      if (this.flushPromise === flow) this.flushPromise = undefined;
+    });
+    return flow;
+  }
+
+  private async synchronizeOnOpen(needsSnapshot: boolean, generation: number, adapter: CloudflareSyncAdapter) {
+    if (!this.isCurrent(generation, adapter)) return;
+    try {
+      if (needsSnapshot || !this.snapshotSeeded) await this.seedServerSnapshot();
+      if (!this.isCurrent(generation, adapter)) return;
+      await this.flushToServer();
+    } catch (error) {
+      this.log("initial synchronization failed", error);
+      if (this.isCurrent(generation, adapter)) this.setState({ status: navigator.onLine ? "pending" : "offline" });
     }
   }
 
   private async retryDelivery() {
-    if (!this.adapter?.isOpen || !this.currentPeers.size) return;
-    await this.repository.requeueStaleSending(4_000);
-    const generation = this.connectionGeneration;
-    await Promise.all(Array.from(this.currentPeers).map(async (peerId) => {
-      await this.sendSnapshotToPeer(peerId, false, generation);
-      await this.flushToPeer(peerId, generation);
-    }));
+    if (!this.adapter?.isReady) return;
+    await this.flushToServer();
   }
 
-  private async requestFreshSnapshots(generation = this.connectionGeneration) {
-    if (!this.adapter?.isOpen || !this.device || !this.currentPeers.size) return;
-    await Promise.allSettled(Array.from(this.currentPeers).filter((peerId) => !this.shouldRejectPeer(peerId)).map((peerId) => this.send({
-      protocol: 1,
-      type: "requestSnapshot",
-      senderDeviceId: this.device!.deviceId,
-      requestId: randomId(),
-    } as SyncControlMessage, peerId)));
-    if (this.isCurrent(generation)) this.setState({ status: "connected" });
-  }
-
-  private async handleIncomingMessage(from: SyncPeer, value: unknown, generation: number, adapter: CloudflareSyncAdapter) {
-    if (!this.isCurrent(generation, adapter) || from.deviceId === this.device?.deviceId || this.shouldRejectPeer(from.deviceId)) return;
-    if (isHello(value)) {
-      if (value.deviceId !== from.deviceId) return;
-      this.peerDevices.set(from.deviceId, value.label);
-      await this.repository.rememberPeer(from.deviceId, value.label);
-      await this.sendSnapshotToPeer(from.deviceId, false, generation);
-      await this.flushToPeer(from.deviceId, generation);
-      this.publishPeerStatuses();
-      return;
-    }
-    if (isSyncControl(value)) {
-      if (value.senderDeviceId !== from.deviceId) return;
-      if (value.type === "snapshotComplete") {
-        this.resolveSnapshot(from.deviceId, value.snapshotId, true);
-        return;
+  private async uploadCheckpoint(targetSequence: number, generation: number, adapter: CloudflareSyncAdapter) {
+    if (this.checkpointUploadPromise) return this.checkpointUploadPromise;
+    const flow = (async () => {
+      if (!this.isCurrent(generation, adapter) || !this.cipher || !this.device || !adapter.isReady || this.lastAppliedSequence < targetSequence) return;
+      if ((await this.repository.pendingOperations(1)).length) return;
+      const operations = await this.repository.snapshotOperations();
+      const payload = await this.cipher.encryptCheckpoint(targetSequence, operations);
+      const chunks = splitCiphertext(payload);
+      const checkpointId = randomId();
+      adapter.uploadCheckpointStart(checkpointId, targetSequence, chunks.length);
+      for (const [chunkIndex, data] of chunks.entries()) {
+        if (!this.isCurrent(generation, adapter) || !adapter.isOpen) return;
+        adapter.uploadCheckpointChunk(checkpointId, chunkIndex, data);
       }
-      await this.sendSnapshotToPeer(from.deviceId, true, generation);
-      await this.flushToPeer(from.deviceId, generation);
-      return;
-    }
-    if (isOperations(value)) {
-      if (value.senderDeviceId !== from.deviceId) return;
-      try {
-        this.setState({ status: "syncing" });
-        const operationIds = await this.repository.applyRemoteOperations(value.operations);
-        if (!this.isCurrent(generation, adapter)) return;
-        await this.send({ protocol: 1, senderDeviceId: this.device!.deviceId, operationIds } as AckMessage, from.deviceId);
-        const { snapshotId, batchIndex, batchCount } = value;
-        if (value.snapshot && typeof snapshotId === "string" && typeof batchIndex === "number" && Number.isInteger(batchIndex) && typeof batchCount === "number" && Number.isInteger(batchCount) && batchCount > 0) {
-          const snapshotKey = this.snapshotWaiterKey(from.deviceId, snapshotId);
-          const progress = this.incomingSnapshots.get(snapshotKey) ?? { batchCount, received: new Set<number>() };
-          progress.received.add(batchIndex);
-          this.incomingSnapshots.set(snapshotKey, progress);
-          if (progress.received.size >= progress.batchCount) {
-            this.incomingSnapshots.delete(snapshotKey);
-            await this.send({ protocol: 1, type: "snapshotComplete", senderDeviceId: this.device!.deviceId, snapshotId, batchCount: progress.batchCount } as SyncControlMessage, from.deviceId);
-          }
-        }
-        await this.repository.markPeerSynced(from.deviceId);
-        if (this.isCurrent(generation, adapter)) this.setState({ status: "connected", lastSyncedAt: new Date().toISOString() });
-      } catch {
-        if (this.isCurrent(generation, adapter)) this.setState({ status: navigator.onLine ? "pending" : "offline" });
-      }
-      return;
-    }
-    if (isAck(value)) {
-      if (value.senderDeviceId !== from.deviceId) return;
-      await this.repository.acknowledgeOperations(value.operationIds);
-      await this.repository.markPeerSynced(from.deviceId);
-      if (!this.isCurrent(generation, adapter)) return;
-      this.setState({ status: "connected", lastSyncedAt: new Date().toISOString() });
-      await this.flushToPeer(from.deviceId, generation);
-    }
+      adapter.uploadCheckpointComplete(checkpointId, targetSequence);
+    })();
+    this.checkpointUploadPromise = flow;
+    void flow.finally(() => {
+      if (this.checkpointUploadPromise === flow) this.checkpointUploadPromise = undefined;
+    });
+    return flow;
   }
 
   async start(secret: string, device: DeviceRecord) {
@@ -517,7 +468,11 @@ export class SyncService {
     this.stopped = false;
     this.secret = secret;
     this.device = device;
+    this.cipher = await createSyncCipher(secret);
+    this.lastAppliedSequence = await this.repository.getLastAppliedSequence();
+    this.snapshotSeeded = await this.repository.getSetting<boolean>(snapshotSeededSettingKey, false);
     await this.loadPeerControlState();
+    await this.repository.requeueStaleSending(4_000);
     if (!navigator.onLine) {
       this.setState({ status: "offline", peerStatuses: this.peerStatuses() });
       return;
@@ -530,18 +485,17 @@ export class SyncService {
   }
 
   async notifyLocalChange() {
-    if (!this.adapter?.isOpen || !this.device) {
+    if (!this.adapter?.isReady || !this.device) {
       this.setState({ status: navigator.onLine ? configuredCloudflareSyncEndpoint() ? "pending" : "local" : "offline" });
       return;
     }
-    const generation = this.connectionGeneration;
-    await Promise.all(Array.from(this.currentPeers).map((peerId) => this.flushToPeer(peerId, generation)));
+    await this.flushToServer();
   }
 
   async updateDeviceLabel(label: string) {
-    if (!this.device || !this.adapter?.isOpen) return;
+    if (!this.device) return;
     this.device = { ...this.device, label };
-    await this.send({ protocol: 1, deviceId: this.device.deviceId, label } as HelloMessage);
+    this.adapter?.sendPresence(label);
   }
 
   async disconnectPeer(deviceId: string) {
@@ -559,11 +513,7 @@ export class SyncService {
     this.disconnectedPeerIds.delete(deviceId);
     await this.savePeerControlState();
     this.publishPeerStatuses();
-    if (navigator.onLine && this.adapter?.isOpen && this.currentPeers.has(deviceId)) {
-      await this.announcePeer(deviceId, this.connectionGeneration);
-    } else if (navigator.onLine) {
-      await this.handleOnline(true);
-    }
+    if (navigator.onLine) await this.handleOnline(true);
   }
 
   async unlinkPeer(deviceId: string) {
@@ -582,8 +532,7 @@ export class SyncService {
     this.disconnectedPeerIds.delete(deviceId);
     await this.savePeerControlState();
     this.publishPeerStatuses();
-    if (navigator.onLine && this.adapter?.isOpen && this.currentPeers.has(deviceId)) await this.announcePeer(deviceId, this.connectionGeneration);
-    else if (navigator.onLine) await this.handleOnline(true);
+    if (navigator.onLine) await this.handleOnline(true);
   }
 
   async clearPeerRecord(deviceId: string) {
@@ -597,11 +546,11 @@ export class SyncService {
   }
 
   private async checkExistingConnection() {
-    if (!this.adapter?.isOpen) return false;
+    if (!this.adapter?.isReady) return false;
     const healthy = await this.adapter.healthCheck();
     if (!healthy) return false;
-    this.setState({ status: this.currentPeers.size ? "connected" : "pending", peerCount: this.currentPeers.size });
-    if (this.currentPeers.size) await this.requestFreshSnapshots();
+    this.adapter.requestCatchup(this.lastAppliedSequence);
+    this.setState({ status: "syncing", peerCount: this.currentPeers.size });
     return true;
   }
 
@@ -647,7 +596,6 @@ export class SyncService {
   }
 
   handleOffline() {
-    this.clearConnectionTimers();
     this.clearReconnectTimer();
     this.connectionGeneration += 1;
     this.adapter?.close(1001, "offline");
@@ -657,7 +605,6 @@ export class SyncService {
 
   stop() {
     this.stopped = true;
-    this.clearConnectionTimers();
     this.clearReconnectTimer();
     this.clearDeliveryTimer();
     this.connectionGeneration += 1;

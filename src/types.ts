@@ -126,6 +126,8 @@ export type SyncEntityType = "category" | "product" | "supplier" | "sale" | "sal
 
 export interface SyncOperation {
   operationId: string;
+  /** Globally unique durable-sync event id. Older local records use operationId as a fallback. */
+  eventId?: string;
   entityType: SyncEntityType;
   entityId: string;
   action: "upsert" | "tombstone";
@@ -144,8 +146,24 @@ export interface OutboxEntry extends SyncOperation {
 
 export interface ProcessedOperation {
   operationId: string;
+  eventId?: string;
   processedAt: string;
   sourceDeviceId: string;
+}
+
+export interface StoredSyncEvent {
+  sequence: number;
+  eventId: string;
+  senderDeviceId: string;
+  createdAt: string;
+  encrypted: boolean;
+  payload: string;
+}
+
+export interface AppliedSyncEvent {
+  sequence: number;
+  eventId: string;
+  operation: SyncOperation;
 }
 
 export interface DeviceRecord {

@@ -640,4 +640,31 @@ describe("idempotent two-device operation sync", () => {
     expect(bState.saleItems.find((entry) => entry.id === item.id)).toMatchObject({ unitSalePriceCents: 75, lineRevenueCents: 75, lineProfitCents: 65 });
     expect(bState.sales.find((entry) => entry.id === sale.id)).toMatchObject({ revenueCents: 75, profitCents: 65 });
   });
+
+  it("persists the applied sequence and does not replay a durable event twice", async () => {
+    const source = makeRepository("durable-sequence-source");
+    const target = makeRepository("durable-sequence-target");
+    await Promise.all([source.initialize(), target.initialize()]);
+    await source.saveProduct(productInput);
+    const bootstrap = await source.pendingOperations(500);
+    await target.applyRemoteEvents(bootstrap.map((operation, index) => ({ sequence: index + 1, eventId: operation.eventId ?? operation.operationId, operation })));
+    await source.acknowledgeOperations(bootstrap.map((operation) => operation.operationId));
+
+    const productId = (await source.snapshot()).products.find((product) => product.name === "Item A")!.id;
+    await source.addToCart(productId, "pack");
+    await source.completeSale();
+    const saleOperations = await source.pendingOperations(500);
+    const startSequence = bootstrap.length + 1;
+    const events = saleOperations.map((operation, index) => ({ sequence: startSequence + index, eventId: operation.eventId ?? operation.operationId, operation }));
+
+    const first = await target.applyRemoteEvents(events);
+    const second = await target.applyRemoteEvents(events);
+    const targetState = await target.snapshot();
+
+    expect(first.gap).toBe(false);
+    expect(second.lastAppliedSequence).toBe(startSequence + saleOperations.length - 1);
+    expect(await target.getLastAppliedSequence()).toBe(startSequence + saleOperations.length - 1);
+    expect(targetState.sales).toHaveLength(1);
+    expect(targetState.inventoryMovements.filter((movement) => movement.reason === "sale")).toHaveLength(1);
+  });
 });
