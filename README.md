@@ -8,7 +8,7 @@ Project One is an iPhone-first, local-first PWA for daily records, quick sales, 
 - GitHub Pages serves only the compiled application shell and static assets.
 - No account, cloud database, analytics, or telemetry is used.
 - Pairing secrets and device identifiers are generated at runtime and are never part of the repository.
-- Trystero/WebRTC is used only to exchange queued operations between paired devices. It is not the database.
+- Cloudflare Workers + Durable Objects + WebSocket are used only to relay queued operations between paired devices. Durable Objects are not the business database.
 - On iOS, Safari and a standalone Home Screen Web App have separate storage. The invite flow uses a short-lived first-party cookie for the install handoff, and every newly discovered peer receives an idempotent full data snapshot before incremental operations continue.
 - After 20:00 local time, the app creates one automatic local backup per day when it is open or the next time it is opened. It keeps recent backup history on the device for recovery; export a JSON backup to Files for protection against clearing browser data or uninstalling the app.
 
@@ -29,11 +29,20 @@ The production build is written to `dist/` and uses relative asset paths, so it 
 
 The included Pages workflow builds and deploys `dist/`. In the repository settings, select **GitHub Actions** as the Pages source. No runtime secrets or environment variables are required.
 
-## Mobile-network connectivity
+## Cloudflare WebSocket sync
 
-Direct WebRTC can fail when one phone is on 4G/5G and the other is behind a Wi-Fi router. For reliable cross-network connections, deploy a backend endpoint that returns short-lived TURN credentials and set `VITE_TURN_CREDENTIALS_URL` during the Pages build. The expected response is the standard `{ "iceServers": [...] }` shape returned by providers such as Cloudflare Realtime TURN.
+The independent relay implementation lives in [`cloudflare-sync/`](./cloudflare-sync/). It uses the Durable Objects WebSocket Hibernation API: each pairing secret maps to one opaque room ID, and the Durable Object keeps only live connection metadata and forwards messages. IndexedDB remains the source of truth on every device; snapshots, outbox operations, acknowledgements, idempotency and conflict resolution remain in the existing Repository.
 
-Do not put a TURN API token or long-lived TURN password in a `VITE_*` variable: Vite embeds those values in the public browser bundle. The credential endpoint must keep the provider secret server-side and return only expiring client credentials.
+Install and deploy the relay from that directory with a browser OAuth flow. Never put a Cloudflare token, pairing secret or business data in Git:
+
+```bash
+cd cloudflare-sync
+pnpm install
+npx wrangler login
+npx wrangler deploy
+```
+
+The Pages workflow already defaults to the deployed public Worker URL; you can override it with the non-secret GitHub Actions repository variable `CLOUDFLARE_SYNC_URL` (or use `VITE_CLOUDFLARE_SYNC_URL` locally). The Pages build injects only this routing URL. If it is not configured, Project One remains local-only and IndexedDB continues to work.
 
 ## First iPhone
 
@@ -45,4 +54,4 @@ Do not put a TURN API token or long-lived TURN password in a `VITE_*` variable: 
 
 If a Home Screen icon was created before an invite was scanned, delete that old icon and add it again from the invitation page so iOS can copy the one-time pairing handoff.
 
-To connect a second iPhone, open Settings and choose **Show invitation QR code**, then scan it with the other phone's camera. You can also send or copy the private invitation link from the same screen. Both apps must be open at the same time for WebRTC to exchange queued operations.
+To connect a second iPhone, open Settings and choose **Show invitation QR code**, then scan it with the other phone's camera. You can also send or copy the private invitation link from the same screen. The first device can be opened before the second; the relay keeps the room available and the second device is discovered immediately after it authenticates. No daily re-pairing is required.

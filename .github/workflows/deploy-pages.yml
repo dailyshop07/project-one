@@ -32,6 +32,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
+        env:
+          # Public routing URL; do not store a Cloudflare token here.
+          VITE_CLOUDFLARE_SYNC_URL: ${{ vars.CLOUDFLARE_SYNC_URL || 'https://project-one-sync.project-one-cloudflare-sync.workers.dev' }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

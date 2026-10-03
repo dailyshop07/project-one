@@ -32,3 +32,6 @@ yarn-error.log*
 *.tsbuildinfo
 /outputs/
 /work/
+/cloudflare-sync/.wrangler/
+/cloudflare-sync/.dev.vars
+/cloudflare-sync/node_modules/
