@@ -10,7 +10,8 @@ import { averageCostCentsForProduct, displayCostCentsAtAverage, inventoryCostSta
 type Tab = "today" | "history" | "inventory" | "products" | "turnover";
 type TurnoverField = "cash" | "pos" | "lotteryPayout";
 type Notice = { kind: "success" | "error"; message: string };
-type AnalysisPeriod = "today" | "7d" | "30d" | "month" | "custom";
+type AnalysisPeriod = "daily" | "7d" | "30d" | "month" | "custom";
+type AnalysisMetric = "revenue" | "profit" | "customers" | "quantity";
 const isBusinessOpen = (date: Date) => {
   const current = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
   return current >= "06:00" && current < "19:00";
@@ -132,6 +133,21 @@ const buildBreakdownRows = (items: SaleItem[], products: Product[], request: Bre
 };
 
 type DailySalesHistoryRow = { date: string; totals: Record<string, number> };
+
+type HistoryMetric = "revenue" | "profit" | "customers";
+type DailyMetricHistoryRow = { date: string; value: number };
+
+const buildDailyMetricHistory = (sales: Sale[], metric: HistoryMetric) => {
+  const rows = new Map<string, DailyMetricHistoryRow>();
+  activeSales(sales).forEach((sale) => {
+    const date = localDateKey(new Date(sale.completedAt));
+    const value = metric === "revenue" ? sale.revenueCents : metric === "profit" ? sale.profitCents : 1;
+    const row = rows.get(date) ?? { date, value: 0 };
+    row.value += value;
+    rows.set(date, row);
+  });
+  return Array.from(rows.values()).sort((a, b) => b.date.localeCompare(a.date));
+};
 
 const buildDailySalesHistory = (sales: Sale[], saleItems: SaleItem[], products: Product[]) => {
   const active = activeSales(sales);
@@ -317,6 +333,13 @@ export function App() {
     }
   };
 
+  const revealProductAfterFirstCartAdd = (productId: string) => {
+    window.requestAnimationFrame(() => {
+      const card = Array.from(document.querySelectorAll<HTMLElement>(".today-page .quick-product")).find((element) => element.dataset.productId === productId);
+      card?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    });
+  };
+
   const openTurnoverEditor = (date: string, field: TurnoverField = "cash") => {
     setTurnoverField(field);
     setTurnoverDate(date);
@@ -345,7 +368,12 @@ export function App() {
             sync={sync}
             currency={currency}
           onSettings={() => setSettingsOpen(true)}
-          onAdd={(id, unit) => void mutate(() => repository.addToCart(id, unit))}
+          onAdd={(id, unit, revealLastProduct) => {
+            const shouldReveal = revealLastProduct && tab === "today";
+            void mutate(() => repository.addToCart(id, unit)).then((ok) => {
+              if (ok && shouldReveal) revealProductAfterFirstCartAdd(id);
+            });
+          }}
           onMove={(id, direction) => void mutate(() => repository.moveProduct(id, direction))}
           onAddProduct={() => { setTab("products"); setProductEditor("new"); }}
           />
@@ -435,7 +463,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
   sync: SyncViewState;
   currency: string;
   onSettings: () => void;
-  onAdd: (id: string, unit: UnitType) => void;
+  onAdd: (id: string, unit: UnitType, revealLastProduct: boolean) => void;
   onMove: (id: string, direction: "up" | "down") => void;
   onAddProduct: () => void;
 }) {
@@ -528,7 +556,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
         )}
         {products.length ? (
           <div className="product-grid">
-            {products.map((product) => {
+            {products.map((product, productIndex) => {
               const cartQuantity = cartQuantities.get(product.id) ?? { pack: 0, carton: 0 };
               const profitFor = (unitType: UnitType) => {
                 const unitsInPacks = unitType === "carton" ? product.packsPerCarton : product.categoryKind === "tobacco" ? product.unitWeightGrams ?? 1 : 1;
@@ -536,7 +564,7 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                 return salePriceCents - averageCostCentsForProduct(product, costStates) * unitsInPacks;
               };
               return (
-                <article className="quick-product" key={product.id}>
+                <article className="quick-product" data-product-id={product.id} key={product.id}>
                   <div className="product-card-info">
                     <h3>{product.name}</h3>
                     <span className="product-card-sold">{formatProductSoldQuantity(product, todayProductQuantities.get(product.id) ?? { pack: 0, carton: 0 })}</span>
@@ -548,8 +576,8 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
                     </div>
                   ) : (
                     <div className={`quick-actions${productHasBundle(product) ? "" : " single"}`}>
-                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} profitCents={profitFor("carton")} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton")} />}
-                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} profitCents={profitFor("pack")} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack")} />
+                      {productHasBundle(product) && <QuickAddButton label={`+1${productBundleUnitLabel(product)}`} priceCents={product.cartonSalePriceCents} profitCents={profitFor("carton")} currency={currency} ariaLabel={`添加 1${productBundleUnitLabel(product)}`} count={cartQuantity.carton} onAdd={() => onAdd(product.id, "carton", productIndex === products.length - 1)} />}
+                      <QuickAddButton label={`+1${productBaseUnitLabel(product)}`} priceCents={product.packSalePriceCents} profitCents={profitFor("pack")} currency={currency} ariaLabel={`添加 1${productBaseUnitLabel(product)}`} count={cartQuantity.pack} onAdd={() => onAdd(product.id, "pack", productIndex === products.length - 1)} />
                     </div>
                   )}
                 </article>
@@ -562,8 +590,8 @@ function TodayPage({ data, sync, currency, onSettings, onAdd, onMove, onAddProdu
       </section>
 
       {salesHistoryOpen && <DailySalesHistorySheet data={data} onClose={() => setSalesHistoryOpen(false)} />}
-      {breakdownRequest && <BreakdownSheet request={breakdownRequest} rows={breakdownRows} total={breakdownTotal} currency={currency} onClose={() => setBreakdownRequest(null)} />}
-      {customerHoursOpen && <CustomerHoursSheet sales={sales} asOf={today} onClose={() => setCustomerHoursOpen(false)} />}
+      {breakdownRequest && <BreakdownSheet data={data} request={breakdownRequest} rows={breakdownRows} total={breakdownTotal} currency={currency} onClose={() => setBreakdownRequest(null)} />}
+      {customerHoursOpen && <CustomerHoursSheet data={data} sales={sales} asOf={today} onClose={() => setCustomerHoursOpen(false)} />}
     </>
   );
 }
@@ -574,53 +602,103 @@ function DailySalesHistorySheet({ data, onClose }: { data: AppSnapshot; onClose:
   return <Sheet title="销量历史" onClose={onClose}><p className="daily-sales-history-note">按每天汇总，已排除作废交易。</p><div className="daily-sales-history-list">{rows.length ? rows.map((row) => { const date = new Date(`${row.date}T12:00:00`); const totals = Object.entries(row.totals).sort(([left], [right]) => { const leftIndex = unitOrder.indexOf(left); const rightIndex = unitOrder.indexOf(right); return (leftIndex === -1 ? unitOrder.length : leftIndex) - (rightIndex === -1 ? unitOrder.length : rightIndex); }); return <div className="daily-sales-history-row" key={row.date}><div className="daily-sales-history-date"><strong>{date.toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" })}</strong><small>{row.date}</small></div><div className="daily-sales-history-values">{totals.map(([label, quantity]) => <span key={label}><b>{quantity.toLocaleString("zh-CN")}</b>{label}</span>)}</div></div>; }) : <p className="empty-inline">还没有历史销量。</p>}</div></Sheet>;
 }
 
-function BreakdownSheet({ request, rows, total, currency, onClose }: { request: BreakdownRequest; rows: BreakdownRow[]; total: number; currency: string; onClose: () => void }) {
-  const isQuantity = request.metric === "quantity";
-  const title = isQuantity ? `${request.unitLabel ?? ""}销量贡献` : request.metric === "revenue" ? "销售额贡献" : "毛利贡献";
-  const totalLabel = isQuantity ? `${total.toLocaleString("zh-CN")}${request.unitLabel ?? ""}` : formatMoney(total, currency);
+function MetricDetailTabs({ value, options, onChange }: { value: string; options: { value: string; label: string }[]; onChange: (value: string) => void }) {
   return (
-    <Sheet title={title} onClose={onClose}>
-      <div className="breakdown-summary">
-        <div><span>今日总计</span><strong>{totalLabel}</strong></div>
-        <small>按贡献从高到低排列</small>
-      </div>
+    <div className="metric-detail-tabs" role="tablist" aria-label="数据查看方式">
+      {options.map((option) => (
+        <button key={option.value} type="button" role="tab" aria-selected={value === option.value} className={value === option.value ? "active" : ""} onClick={() => onChange(option.value)}>{option.label}</button>
+      ))}
+    </div>
+  );
+}
+
+function DailyMetricHistory({ sales, metric, currency }: { sales: Sale[]; metric: HistoryMetric; currency: string }) {
+  const rows = buildDailyMetricHistory(sales, metric);
+  const valueLabel = metric === "revenue" ? "销售额" : metric === "profit" ? "毛利" : "客户数";
+  return (
+    <>
+      <p className="daily-metric-history-note">按日期从近到远汇总，已排除作废交易。</p>
       {rows.length ? (
-        <div className="breakdown-list">
-          {rows.map((row, index) => {
-            const share = total > 0 ? row.value / total : 0;
-            const valueLabel = isQuantity ? `${row.value.toLocaleString("zh-CN")}${request.unitLabel ?? ""}` : formatMoney(row.value, currency);
+        <div className="daily-metric-history-list">
+          {rows.map((row) => {
+            const date = new Date(`${row.date}T12:00:00`);
+            const value = metric === "customers" ? `${row.value.toLocaleString("zh-CN")} 人` : formatMoney(row.value, currency);
             return (
-              <div className="breakdown-row" key={`${row.name}-${index}`}>
-                <div className="breakdown-row-main"><span className="breakdown-rank">{index + 1}</span><div className="breakdown-name"><strong>{row.name}</strong><small>销量 {formatQuantitySummary(row.quantityByUnit) || "—"}</small></div><b>{valueLabel}</b></div>
-                <div className="breakdown-row-foot"><span>{total > 0 ? `占比 ${Math.round(share * 100)}%` : "占比 —"}</span><div className="breakdown-share"><i style={{ width: `${Math.min(100, Math.max(0, share * 100))}%` }} /></div></div>
+              <div className="daily-metric-history-row" key={row.date}>
+                <div className="daily-metric-history-date"><strong>{date.toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" })}</strong><small>{row.date}</small></div>
+                <div className="daily-metric-history-value"><small>{valueLabel}</small><b>{value}</b></div>
               </div>
             );
           })}
         </div>
-      ) : <p className="empty-inline">今天还没有可统计的数据。</p>}
+      ) : <p className="empty-inline">还没有历史{valueLabel}。</p>}
+    </>
+  );
+}
+
+function BreakdownSheet({ data, request, rows, total, currency, onClose }: { data: AppSnapshot; request: BreakdownRequest; rows: BreakdownRow[]; total: number; currency: string; onClose: () => void }) {
+  const [view, setView] = useState<"breakdown" | "history">("breakdown");
+  const isQuantity = request.metric === "quantity";
+  const title = isQuantity
+    ? `${request.unitLabel ?? ""}销量贡献`
+    : view === "history" ? (request.metric === "revenue" ? "历史销售额" : "历史毛利") : request.metric === "revenue" ? "销售额贡献" : "毛利贡献";
+  const totalLabel = isQuantity ? `${total.toLocaleString("zh-CN")}${request.unitLabel ?? ""}` : formatMoney(total, currency);
+  return (
+    <Sheet title={title} onClose={onClose}>
+      {!isQuantity && <MetricDetailTabs value={view} options={[{ value: "breakdown", label: "贡献" }, { value: "history", label: request.metric === "revenue" ? "历史销售额" : "历史毛利" }]} onChange={(next) => setView(next as "breakdown" | "history")} />}
+      {view === "history" && !isQuantity ? (
+        <DailyMetricHistory sales={data.sales} metric={request.metric === "profit" ? "profit" : "revenue"} currency={currency} />
+      ) : (
+        <>
+          <div className="breakdown-summary">
+            <div><span>今日总计</span><strong>{totalLabel}</strong></div>
+            <small>按贡献从高到低排列</small>
+          </div>
+          {rows.length ? (
+            <div className="breakdown-list">
+              {rows.map((row, index) => {
+                const share = total > 0 ? row.value / total : 0;
+                const valueLabel = isQuantity ? `${row.value.toLocaleString("zh-CN")}${request.unitLabel ?? ""}` : formatMoney(row.value, currency);
+                return (
+                  <div className="breakdown-row" key={`${row.name}-${index}`}>
+                    <div className="breakdown-row-main"><span className="breakdown-rank">{index + 1}</span><div className="breakdown-name"><strong>{row.name}</strong><small>销量 {formatQuantitySummary(row.quantityByUnit) || "—"}</small></div><b>{valueLabel}</b></div>
+                    <div className="breakdown-row-foot"><span>{total > 0 ? `占比 ${Math.round(share * 100)}%` : "占比 —"}</span><div className="breakdown-share"><i style={{ width: `${Math.min(100, Math.max(0, share * 100))}%` }} /></div></div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : <p className="empty-inline">今天还没有可统计的数据。</p>}
+        </>
+      )}
     </Sheet>
   );
 }
 
-function CustomerHoursSheet({ sales, asOf, onClose }: { sales: Sale[]; asOf: Date; onClose: () => void }) {
+function CustomerHoursSheet({ data, sales, asOf, onClose }: { data: AppSnapshot; sales: Sale[]; asOf: Date; onClose: () => void }) {
+  const [view, setView] = useState<"hours" | "history">("hours");
   const rows = buildHourlyCustomerRows(sales, asOf);
   const total = sales.length;
   return (
-    <Sheet title="到店客户数" onClose={onClose}>
-      <div className="customer-hours-summary">
-        <div><span>今日到店客户</span><strong>{total} 人</strong></div>
-        <small>按小时累计 · 截止 {formatTime(asOf.toISOString())}</small>
-      </div>
-      {rows.length ? (
-        <div className="customer-hours-list">
-          {rows.map((row) => (
-            <div className="customer-hours-row" key={row.startHour}>
-              <span>{String(row.startHour).padStart(2, "0")}:00–{String(row.endHour).padStart(2, "0")}:00</span>
-              <strong>{row.customers} 人</strong>
+    <Sheet title={view === "history" ? "历史客户数" : "到店客户数"} onClose={onClose}>
+      <MetricDetailTabs value={view} options={[{ value: "hours", label: "今日时段" }, { value: "history", label: "历史数据" }]} onChange={(next) => setView(next as "hours" | "history")} />
+      {view === "history" ? <DailyMetricHistory sales={data.sales} metric="customers" currency="$" /> : (
+        <>
+          <div className="customer-hours-summary">
+            <div><span>今日到店客户</span><strong>{total} 人</strong></div>
+            <small>按小时累计 · 截止 {formatTime(asOf.toISOString())}</small>
+          </div>
+          {rows.length ? (
+            <div className="customer-hours-list">
+              {rows.map((row) => (
+                <div className="customer-hours-row" key={row.startHour}>
+                  <span>{String(row.startHour).padStart(2, "0")}:00–{String(row.endHour).padStart(2, "0")}:00</span>
+                  <strong>{row.customers} 人</strong>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      ) : <p className="empty-inline">营业时间从 06:00 开始，当前还没有可统计的时段。</p>}
+          ) : <p className="empty-inline">营业时间从 06:00 开始，当前还没有可统计的时段。</p>}
+        </>
+      )}
     </Sheet>
   );
 }
@@ -798,12 +876,100 @@ function DailyTurnoverSheet({ date, turnover, initialField, currency, onClose, o
   );
 }
 
+type AnalysisTrendPoint = { key: string; label: string; value: number; quantityByUnit: Record<string, number> };
+
+const analysisMetricLabel = (metric: AnalysisMetric) => metric === "revenue" ? "销售额" : metric === "profit" ? "毛利" : metric === "customers" ? "客户数" : "售出数量";
+const analysisTrendTitle = (metric: AnalysisMetric) => `${analysisMetricLabel(metric)}趋势`;
+
+const formatAnalysisMetricValue = (metric: AnalysisMetric, value: number, quantityByUnit: Record<string, number>, currency: string) => {
+  if (metric === "revenue" || metric === "profit") return formatMoney(value, currency);
+  if (metric === "customers") return `${value.toLocaleString("zh-CN")} 人`;
+  return formatQuantitySummary(quantityByUnit) || "0";
+};
+
+const buildAnalysisTrend = (sales: Sale[], saleItems: SaleItem[], products: Product[], metric: AnalysisMetric, period: AnalysisPeriod, customStart: string, customEnd: string) => {
+  const active = activeSales(sales);
+  const today = new Date();
+  const todayKey = localDateKey(today);
+  const activeDates = active.map((sale) => localDateKey(new Date(sale.completedAt))).filter((date) => date <= todayKey).sort();
+  const firstDate = activeDates[0] ?? todayKey;
+  let startKey = firstDate;
+  let endKey = todayKey;
+  let monthly = period === "month";
+  if (period === "7d" || period === "30d") {
+    const start = new Date(`${todayKey}T12:00:00`);
+    start.setDate(start.getDate() - (period === "7d" ? 6 : 29));
+    startKey = localDateKey(start);
+  }
+  if (period === "custom") {
+    startKey = customStart;
+    endKey = customEnd;
+  }
+  if (monthly) {
+    startKey = `${firstDate.slice(0, 7)}-01`;
+  }
+  if (startKey > endKey) startKey = endKey;
+
+  const keys: string[] = [];
+  if (monthly) {
+    const cursor = new Date(`${startKey.slice(0, 7)}-01T12:00:00`);
+    const last = new Date(`${endKey.slice(0, 7)}-01T12:00:00`);
+    while (cursor <= last) {
+      keys.push(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`);
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  } else {
+    const cursor = new Date(`${startKey}T12:00:00`);
+    const last = new Date(`${endKey}T12:00:00`);
+    while (cursor <= last) {
+      keys.push(localDateKey(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  }
+  if (!keys.length) keys.push(monthly ? todayKey.slice(0, 7) : todayKey);
+
+  const bucketKey = (date: string) => monthly ? date.slice(0, 7) : date;
+  const aggregates = new Map<string, { value: number; quantityByUnit: Record<string, number> }>();
+  keys.forEach((key) => aggregates.set(key, { value: 0, quantityByUnit: {} }));
+  const salesInRange = active.filter((sale) => {
+    const date = localDateKey(new Date(sale.completedAt));
+    return date >= startKey && date <= endKey;
+  });
+  const saleIds = new Set(salesInRange.map((sale) => sale.id));
+  salesInRange.forEach((sale) => {
+    const aggregate = aggregates.get(bucketKey(localDateKey(new Date(sale.completedAt))));
+    if (!aggregate) return;
+    if (metric === "revenue") aggregate.value += sale.revenueCents;
+    if (metric === "profit") aggregate.value += sale.profitCents;
+    if (metric === "customers") aggregate.value += 1;
+  });
+  if (metric === "quantity") {
+    const productsById = new Map(products.map((product) => [product.id, product]));
+    saleItems.forEach((item) => {
+      if (!saleIds.has(item.saleId)) return;
+      const sale = salesInRange.find((entry) => entry.id === item.saleId);
+      if (!sale) return;
+      const displayQuantity = saleItemDisplayQuantity(item, productsById.get(item.productId));
+      const aggregate = aggregates.get(bucketKey(localDateKey(new Date(sale.completedAt))));
+      if (!aggregate) return;
+      aggregate.value += displayQuantity.quantity;
+      aggregate.quantityByUnit[displayQuantity.unitLabel] = (aggregate.quantityByUnit[displayQuantity.unitLabel] ?? 0) + displayQuantity.quantity;
+    });
+  }
+  return keys.map((key) => {
+    const aggregate = aggregates.get(key) ?? { value: 0, quantityByUnit: {} };
+    const date = monthly ? new Date(`${key}-01T12:00:00`) : new Date(`${key}T12:00:00`);
+    return { key, label: monthly ? `${date.getFullYear()}/${date.getMonth() + 1}` : `${date.getMonth() + 1}/${date.getDate()}`, ...aggregate };
+  }).reverse();
+};
+
 function AnalysisView({ data, currency }: { data: AppSnapshot; currency: string }) {
-  const [period, setPeriod] = useState<AnalysisPeriod>("today");
+  const [period, setPeriod] = useState<AnalysisPeriod>("daily");
+  const [metric, setMetric] = useState<AnalysisMetric>("revenue");
   const [customStart, setCustomStart] = useState(localDateKey(new Date(Date.now() - 6 * 86400000)));
   const [customEnd, setCustomEnd] = useState(localDateKey(new Date()));
   const [ranking, setRanking] = useState<"quantity" | "revenue" | "profit">("quantity");
-  const { start, end } = useMemo(() => analysisRange(period, customStart, customEnd), [period, customStart, customEnd]);
+  const { start, end } = useMemo(() => analysisRange(period, customStart, customEnd, data.sales), [period, customStart, customEnd, data.sales]);
   const sales = activeSales(data.sales).filter((sale) => {
     const time = new Date(sale.completedAt).getTime();
     return time >= start.getTime() && time <= end.getTime();
@@ -811,14 +977,11 @@ function AnalysisView({ data, currency }: { data: AppSnapshot; currency: string 
   const saleIds = new Set(sales.map((sale) => sale.id));
   const items = data.saleItems.filter((item) => saleIds.has(item.saleId));
   const metrics = summarizeSales(sales, data.saleItems, data.products);
-  const trend = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(end);
-    date.setHours(0, 0, 0, 0);
-    date.setDate(date.getDate() - (6 - index));
-    const key = localDateKey(date);
-    return { key, label: `${date.getMonth() + 1}/${date.getDate()}`, value: sales.filter((sale) => localDateKey(new Date(sale.completedAt)) === key).reduce((sum, sale) => sum + sale.revenueCents, 0) };
-  });
-  const maxTrend = Math.max(1, ...trend.map((point) => point.value));
+  const trend = buildAnalysisTrend(data.sales, data.saleItems, data.products, metric, period, customStart, customEnd);
+  const maxTrend = Math.max(1, ...trend.map((point) => Math.abs(point.value)));
+  const metricTotal = metric === "revenue" ? metrics.revenue : metric === "profit" ? metrics.profit : metric === "customers" ? metrics.customers : metrics.quantity;
+  const metricTotalLabel = formatAnalysisMetricValue(metric, metricTotal, metrics.unitTotals, currency);
+  const trendAriaLabel = `${analysisTrendTitle(metric)}，从近到远排列`;
   const productsById = new Map(data.products.map((product) => [product.id, product]));
   const ranks = Array.from(items.reduce((map, item) => {
     const displayQuantity = saleItemDisplayQuantity(item, productsById.get(item.productId));
@@ -834,21 +997,26 @@ function AnalysisView({ data, currency }: { data: AppSnapshot; currency: string 
   return (
     <div className="analysis-stack">
       <div className="period-tabs">
-        {([['today', '今日'], ['7d', '7天'], ['30d', '30天'], ['month', '按月'], ['custom', '自定义']] as [AnalysisPeriod, string][]).map(([value, label]) => (
+        {([['daily', '每天'], ['7d', '7天'], ['30d', '30天'], ['month', '按月'], ['custom', '自定义']] as [AnalysisPeriod, string][]).map(([value, label]) => (
           <button key={value} className={period === value ? "active" : ""} onClick={() => setPeriod(value)}>{label}</button>
         ))}
       </div>
       {period === "custom" && <div className="custom-dates"><input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} /><span>至</span><input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} /></div>}
       <section className="card analysis-metrics">
-        <Metric label="销售额" value={formatMoney(metrics.revenue, currency)} />
-        <Metric label="毛利" value={formatMoney(metrics.profit, currency)} />
-        <Metric label="客户数" value={String(metrics.customers)} />
-        <Metric label="售出数量" value={Object.entries(metrics.unitTotals).map(([label, quantity]) => `${quantity}${label}`).join(" · ") || "0"} />
+        <Metric label="销售额" value={formatMoney(metrics.revenue, currency)} onClick={() => setMetric("revenue")} active={metric === "revenue"} />
+        <Metric label="毛利" value={formatMoney(metrics.profit, currency)} onClick={() => setMetric("profit")} active={metric === "profit"} />
+        <Metric label="客户数" value={String(metrics.customers)} onClick={() => setMetric("customers")} active={metric === "customers"} />
+        <Metric label="售出数量" value={formatQuantitySummary(metrics.unitTotals) || "0"} onClick={() => setMetric("quantity")} active={metric === "quantity"} />
       </section>
       <section className="card chart-card">
-        <h2>销售趋势</h2>
-        <div className="bar-chart" aria-label="最近七天销售趋势">
-          {trend.map((point) => <div className="bar-column" key={point.key}><div className="bar" style={{ height: `${Math.max(4, point.value / maxTrend * 100)}%` }} /><span>{point.label}</span></div>)}
+        <div className="analysis-chart-head"><div><h2>{analysisTrendTitle(metric)}</h2><span>{period === "daily" ? "全部每日记录" : period === "month" ? "按月汇总" : period === "7d" ? "最近 7 天" : period === "30d" ? "最近 30 天" : "自定义期间"}</span></div><strong>{metricTotalLabel}</strong></div>
+        <div className="analysis-trend-scroll" role="region" tabIndex={0} aria-label={trendAriaLabel}>
+          <div className="bar-chart" style={{ minWidth: `${Math.max(100, trend.length * 58)}px` }}>
+            {trend.map((point) => {
+              const valueLabel = formatAnalysisMetricValue(metric, point.value, point.quantityByUnit, currency);
+              return <div className="bar-column" key={point.key} title={`${point.label} ${valueLabel}`}><strong className="bar-value">{valueLabel}</strong><div className={`bar${point.value < 0 ? " negative" : ""}${point.value === 0 ? " empty" : ""}`} style={{ height: `${point.value === 0 ? 4 : Math.max(7, Math.abs(point.value) / maxTrend * 100)}%` }} /><span>{point.label}</span></div>;
+            })}
+          </div>
         </div>
       </section>
       <section className="card ranking-card">
@@ -952,7 +1120,7 @@ function MetricIcon({ kind }: { kind: MetricIconKind }) {
   return <span className="metric-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{paths[kind]}</svg></span>;
 }
 
-function Metric({ icon, label, value, comparison, onClick }: { icon?: Exclude<MetricIconKind, "sales">; label: string; value: string; comparison?: MetricComparison; onClick?: () => void }) {
+function Metric({ icon, label, value, comparison, onClick, active = false }: { icon?: Exclude<MetricIconKind, "sales">; label: string; value: string; comparison?: MetricComparison; onClick?: () => void; active?: boolean }) {
   const valueLengthClass = value.length >= 9 ? " metric-value-long" : value.length >= 7 ? " metric-value-medium" : "";
   const customerValueClass = icon === "customers" ? " metric-value-customer" : "";
   const content = (
@@ -965,7 +1133,7 @@ function Metric({ icon, label, value, comparison, onClick }: { icon?: Exclude<Me
       {comparison && <div className={`metric-period-compare ${comparison.tone}`}><span>较昨日同期</span><strong>{comparison.arrow} {comparison.value.replace(/^[+-]/, "")}</strong></div>}
     </>
   );
-  return onClick ? <button type="button" className="metric metric-button" onClick={onClick}>{content}</button> : <div className="metric">{content}</div>;
+  return onClick ? <button type="button" className={`metric metric-button${active ? " active" : ""}`} aria-pressed={active} onClick={onClick}>{content}</button> : <div className="metric">{content}</div>;
 }
 
 function SalesMetric({ values, onClick }: { values: [string, number][]; onClick: () => void }) {
@@ -1487,12 +1655,19 @@ function calculateCart(data: AppSnapshot) {
   return { ...totals, revenueCents: data.cart.totalOverrideCents ?? totals.revenueCents };
 }
 
-function analysisRange(period: AnalysisPeriod, customStart: string, customEnd: string) {
+function analysisRange(period: AnalysisPeriod, customStart: string, customEnd: string, sales: Sale[] = []) {
   const end = new Date(); end.setHours(23, 59, 59, 999);
   const start = new Date(); start.setHours(0, 0, 0, 0);
   if (period === "7d") start.setDate(start.getDate() - 6);
   if (period === "30d") start.setDate(start.getDate() - 29);
-  if (period === "month") start.setDate(1);
+  if (period === "daily" || period === "month") {
+    const firstSale = activeSales(sales).map((sale) => new Date(sale.completedAt)).filter((date) => date <= end).sort((a, b) => a.getTime() - b.getTime())[0];
+    if (firstSale) {
+      start.setTime(firstSale.getTime());
+      start.setHours(0, 0, 0, 0);
+    }
+    if (period === "month") start.setDate(1);
+  }
   if (period === "custom") { const customStartDate = new Date(`${customStart}T00:00:00`); const customEndDate = new Date(`${customEnd}T23:59:59.999`); return { start: customStartDate, end: customEndDate }; }
   return { start, end };
 }
